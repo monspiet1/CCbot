@@ -115,25 +115,33 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendMessageToApi(String text) {
 
+        messageList.add(new Message(text, Message.SENT_BY_ME));
+        chatAdapter.notifyItemInserted(messageList.size() - 1);
+
+        // Limpa input e esconde welcome
+        editTextInput.setText("");
+
         if (layoutWelcome.getVisibility() == View.VISIBLE) {
             layoutWelcome.setVisibility(View.GONE);
         }
 
-        // 1. Adiciona a mensagem do Usuário na tela imediatamente
-        messageList.add(new Message(text, Message.SENT_BY_ME));
+        // Adiciona a mensagem do Usuário na tela imediatamente
+        messageList.add(new Message("...", Message.SENT_BY_LOADING));
         chatAdapter.notifyItemInserted(messageList.size() - 1);
         recyclerView.smoothScrollToPosition(messageList.size() - 1);
-        editTextInput.setText("");
 
-        // 2. Prepara a requisição JSON: {"pergunta": "..."}
+        // Prepara a requisição JSON: {"pergunta": "..."}
         ChatRequest request = new ChatRequest(text);
 
-        // 3. Faz a chamada para a API em segundo plano
+        // Faz a chamada para a API em segundo plano
         Call<ChatResponse> call = apiService.sendMessage(request);
 
         call.enqueue(new Callback<ChatResponse>() {
             @Override
             public void onResponse(Call<ChatResponse> call, Response<ChatResponse> response) {
+
+                removeLoading();
+
                 // Esse método roda quando o servidor responde
                 if (response.isSuccessful() && response.body() != null) {
                     // Pega o texto da resposta: "Um array dinâmico é..."
@@ -146,6 +154,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onFailure(Call<ChatResponse> call, Throwable t) {
+                removeLoading();
                 // Esse método roda se não tiver internet ou o servidor estiver fora
                 addBotMessage("Falha na conexão: " + t.getMessage());
             }
@@ -185,5 +194,14 @@ public class MainActivity extends AppCompatActivity {
 
         // Inicia o processo
         handler.post(characterAdder);
+    }
+
+    // Método auxiliar para remover o último item se for LOADING
+    private void removeLoading() {
+        int lastPosition = messageList.size() - 1;
+        if (lastPosition >= 0 && messageList.get(lastPosition).getSender() == Message.SENT_BY_LOADING) {
+            messageList.remove(lastPosition);
+            chatAdapter.notifyItemRemoved(lastPosition);
+        }
     }
 }
