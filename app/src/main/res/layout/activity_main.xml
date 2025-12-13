@@ -20,6 +20,37 @@
         app:stackFromEnd="true"
         tools:listitem="@layout/item_message_bot" />
 
+    <LinearLayout
+        android:id="@+id/layout_welcome"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:alpha="0.7"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/layout_input"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:layout_marginBottom="16dp"
+            android:src="@drawable/icon" />
+
+        <TextView
+            android:id="@+id/text_welcome_msg"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="O que aprenderemos hoje?"
+            android:letterSpacing="0.05"
+            android:textAlignment="center"
+            android:textColor="#757575"
+            android:textSize="18sp"
+            android:textStyle="bold|italic" />
+
+    </LinearLayout>
+
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/layout_input"
         android:layout_width="match_parent"
@@ -39,7 +70,12 @@
             android:minHeight="48dp"
             android:paddingStart="20dp"
             android:paddingEnd="20dp"
+            android:paddingBottom="8dp"
+            android:paddingTop="8dp"
             android:textSize="16sp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:enabled="true"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/button_send"
             app:layout_constraintStart_toStartOf="parent"
