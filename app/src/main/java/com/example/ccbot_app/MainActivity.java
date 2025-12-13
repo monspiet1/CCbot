@@ -57,7 +57,7 @@ public class MainActivity extends AppCompatActivity {
 
         // 2. Configurar a Lista e o Adapter
         messageList = new ArrayList<>();
-        chatAdapter = new ChatAdapter(messageList);
+        chatAdapter = new ChatAdapter(this, messageList);
 
         recyclerView.setAdapter(chatAdapter);
         LinearLayoutManager layoutManager = new LinearLayoutManager(this);

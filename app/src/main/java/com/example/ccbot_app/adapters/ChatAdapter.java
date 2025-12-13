@@ -1,5 +1,6 @@
 package com.example.ccbot_app.adapters;
 
+import android.content.Context;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -13,32 +14,32 @@ import com.example.ccbot_app.models.Message;
 
 import java.util.List;
 
+import io.noties.markwon.Markwon;
+
 public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private final List<Message> messageList;
+    private final Markwon markwon;
 
-    public ChatAdapter(List<Message> messageList) {
+    public ChatAdapter(Context context, List<Message> messageList) {
         this.messageList = messageList;
+        this.markwon = Markwon.create(context);
     }
 
-    // Esse método diz pro Android qual tipo de visualização usar (Bot ou Usuário)
     @Override
     public int getItemViewType(int position) {
         Message message = messageList.get(position);
-        return message.getSender(); // Retorna 0 ou 1
+        return message.getSender();
     }
 
     @NonNull
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        // Se for 0 (Usuário), carrega o layout da direita
         if (viewType == Message.SENT_BY_ME) {
             View view = LayoutInflater.from(parent.getContext())
                     .inflate(R.layout.item_message_user, parent, false);
             return new UserViewHolder(view);
-        }
-        // Se for 1 (Bot), carrega o layout da esquerda
-        else {
+        } else {
             View view = LayoutInflater.from(parent.getContext())
                     .inflate(R.layout.item_message_bot, parent, false);
             return new BotViewHolder(view);
@@ -49,20 +50,21 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
         Message message = messageList.get(position);
 
-        // Preenche o texto dependendo de qual ViewHolder estamos usando
+        TextView targetTextView;
+
         if (holder instanceof UserViewHolder) {
-            ((UserViewHolder) holder).textMessage.setText(message.getText());
-        } else if (holder instanceof BotViewHolder) {
-            ((BotViewHolder) holder).textMessage.setText(message.getText());
+            targetTextView = ((UserViewHolder) holder).textMessage;
+        } else {
+            targetTextView = ((BotViewHolder) holder).textMessage;
         }
+
+        markwon.setMarkdown(targetTextView, message.getText());
     }
 
     @Override
     public int getItemCount() {
         return messageList.size();
     }
-
-    // --- Classes internas para segurar os elementos da tela (ViewHolders) ---
 
     static class UserViewHolder extends RecyclerView.ViewHolder {
         TextView textMessage;
