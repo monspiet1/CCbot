@@ -12,15 +12,28 @@ from prompts import contextualize_q_system_prompt, evaluator_system_prompt, answ
 
 load_dotenv("./.env")
 
+class Intent(BaseModel):
+    intent: Literal["casual", "information_seeking"] = Field(
+        description="Classification of user intent. 'casual' for greetings, small talk, identity questions; 'information_seeking' for factual or knowledge-based queries."
+    )
+
 class GraphState(MessagesState):
     context: Annotated[List[Document], operator.add]
     query: str
     is_relevant: bool
+    intent: str
 
 class RelevanceDecision(BaseModel):
     is_relevant: bool = Field(
         description="Return True if the context is sufficient, correct, and relevant to answer the question. Otherwise, return False."
     )
+
+llm_intent = ChatGoogleGenerativeAI(
+    model="gemini-3.1-flash-lite-preview",
+    temperature=1.0
+)
+
+llm_intent_structured = llm_intent.with_structured_output(Intent)
 
 llm_generator = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite-preview",
@@ -33,6 +46,52 @@ llm_evaluator = ChatGoogleGenerativeAI(
 )
 
 llm_evaluator_structured = llm_evaluator.with_structured_output(RelevanceDecision)
+
+def classify_intent(state: GraphState) -> dict:
+    """Classifies the user's intent: casual or information-seeking."""
+
+    last_msg = state["messages"][-1]
+    raw = last_msg.content
+
+    if isinstance(raw, list):
+        text_parts = [item["text"] for item in raw if isinstance(item, dict) and "text" in item]
+        user_text = " ".join(text_parts).strip()
+    else:
+        user_text = str(raw).strip()
+
+    decision = llm_intent_structured.invoke([
+        {"role": "system", "content": "Classify the user's intent in the following message."},
+        {"role": "user", "content": user_text},
+    ])
+
+    return {"intent": decision.intent}
+
+def route_by_intent(state: GraphState) -> Literal["extract_query", "casual_response"]:
+    """Route based on newly classified intent."""
+
+    intent = state.get("intent", "information_seeking")
+    if intent == "casual":
+        return "casual_response"
+    return "extract_query"
+
+def casual_response(state: GraphState) -> dict:
+    "Answers casual questions in a friendly manner, without external context."
+    
+    last_msg = state["messages"][-1]
+    raw = last_msg.content
+
+    if isinstance(raw, list):
+        text_parts = [item["text"] for item in raw if isinstance(item, dict) and "text" in item]
+        user_text = " ".join(text_parts).strip()
+    else:
+        user_text = str(raw).strip()
+
+    response = llm_generator.invoke([
+        {"role": "system", "content": "Você é um assistente amigável. Responda de forma curta e simpática a mensagem do usuário."},
+        {"role": "user", "content": user_text},
+    ])
+
+    return {"messages": [response]}
 
 def extract_query(state: GraphState):
     """Extracts and contextualizes the user's query based on their history."""
@@ -140,7 +199,7 @@ def create_response(state: GraphState):
     """Create the educational answer based on combined context."""
 
     query = state["query"]
-    
+
     if isinstance(query, list):
         parts = []
         for item in query:
