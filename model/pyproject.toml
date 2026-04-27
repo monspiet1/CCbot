@@ -7,8 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "dotenv>=0.9.9",
     "langchain-chroma>=1.1.0",
+    "langchain-community>=0.4.1",
     "langchain-google-genai>=4.2.2",
     "langchain-tavily>=0.2.18",
+    "langchain-text-splitters>=1.1.2",
     "langgraph>=1.1.9",
     "langgraph-cli[inmem]>=0.4.24",
 ]

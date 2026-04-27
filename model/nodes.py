@@ -1,17 +1,26 @@
-from typing import Literal, List
+import operator
+from typing import Annotated, Literal, List
 from langchain_core.documents import Document
-
+from langchain_core.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_tavily import TavilySearch
 from langgraph.graph import MessagesState
-from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
-
 from vector_store import vector_store
-
 from dotenv import load_dotenv
+from prompts import contextualize_q_system_prompt, evaluator_system_prompt, answer_system_prompt
 
 load_dotenv("./.env")
+
+class GraphState(MessagesState):
+    context: Annotated[List[Document], operator.add]
+    query: str
+    is_relevant: bool
+
+class RelevanceDecision(BaseModel):
+    is_relevant: bool = Field(
+        description="Return True if the context is sufficient, correct, and relevant to answer the question. Otherwise, return False."
+    )
 
 llm_generator = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite-preview",
@@ -23,24 +32,46 @@ llm_evaluator = ChatGoogleGenerativeAI(
     temperature=0.0
 )
 
-class GraphState(MessagesState):
-    context: List[Document]
-    is_relevant: bool
+llm_evaluator_structured = llm_evaluator.with_structured_output(RelevanceDecision)
 
-class RelevanceDecision(BaseModel):
-    is_relevant: bool = Field(
-        description="Retorne True se o contexto for suficiente, correto e relevante para responder à pergunta. Caso contrário, retorne False."
-    )
+def extract_query(state: GraphState):
+    """Extracts and contextualizes the user's query based on their history."""
+    messages = state["messages"]
+    last_msg = messages[-1]
+    raw_content = last_msg.content
+
+    if isinstance(raw_content, list):
+        parts = []
+        for item in raw_content:
+            if isinstance(item, dict) and "text" in item:
+                parts.append(item["text"])
+        query_string = " ".join(parts).strip()
+    else:
+        query_string = str(raw_content).strip()
+
+    if len(messages) <= 1:
+        return {"query": query_string}
+
+    sys_msg = SystemMessage(content=contextualize_q_system_prompt)
+    result = llm_evaluator.invoke([sys_msg] + list(messages))
+    contextualized_query = result.content
+
+    if isinstance(contextualized_query, list):
+        parts = []
+        for item in contextualized_query:
+            if isinstance(item, dict) and "text" in item:
+                parts.append(item["text"])
+        contextualized_query = " ".join(parts).strip()
+
+    return {"query": contextualized_query}
 
 def retrieve_context(state: GraphState):
     """Retrieve top documents from ChromaDB Collection bases on query."""
 
-    query = state["messages"][-1].content
+    query = state["query"]
 
-    if not isinstance(query, str):
-        # Handle list-based content by joining it or picking the first text block
-        # For now, we'll just force it or raise an error
-        return {"context": ""}
+    if not isinstance(query, str) or not query:
+        return {"context": []}
 
     docs = vector_store.similarity_search(query, k=3)
 
@@ -49,94 +80,87 @@ def retrieve_context(state: GraphState):
 def relevance_context(state: GraphState):
     """Determine whether the retrieved context is relevant and sufficient."""
 
-    query = state["messages"][-1].content
+    query = state["query"]
     context_docs = state["context"]
 
-    formatted_context = "\n\n".join(
-        f"Fonte {i+1}:\n{doc.page_content}" 
-        for i, doc in enumerate(context_docs)
+    if not context_docs:
+        return {"is_relevant": False}
+
+    formatted = "\n\n".join(
+        f"Fonte {i+1}:\n{d.page_content}" for i, d in enumerate(context_docs)
     )
 
-    structured_llm = llm_evaluator.with_structured_output(RelevanceDecision)
-
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            "Você é um avaliador de contexto extremamente rigoroso. "
-            "Sua função é determinar se os documentos recuperados fornecem informações SUFICIENTES, "
-            "CORRETAS e RELEVANTES para gerar uma resposta completa e altamente didática para a pergunta do usuário.\n\n"
-            "Critérios para aprovação (Responda APENAS 'yes'):\n"
-            "- O contexto aborda diretamente o núcleo da pergunta.\n"
-            "- Há profundidade suficiente para uma explicação passo a passo e educativa.\n"
-            "- Nenhuma informação externa crítica é necessária para responder.\n\n"
-            "Critérios para falha (Responda APENAS 'no'):\n"
-            "- O contexto é tangencial, vago ou superficial.\n"
-            "- Faltam peças-chave para uma resposta completa e correta.\n"
-            "- O Agente precisaria adivinhar ou inventar informações (alucinar) para preencher lacunas.\n\n"
-            "Retorne ESTRITAMENTE a palavra 'yes' ou 'no', em letras minúsculas, sem NENHUMA outra palavra, pontuação ou explicação."
-        ),
-        ("human", "Contexto Recuperado:\n{context}\n\nPergunta do Usuário: {query}")
+    prompt = evaluator_system_prompt.format(context=formatted)
+    response = llm_evaluator_structured.invoke([
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"User Query: {query}\n\nAssess the context and return your decision."},
     ])
 
-    chain = prompt | structured_llm
-
-    response = chain.invoke({
-        "context": formatted_context,
-        "query": query
-    })
-
-    return {"is_relevant": response.is_relevant} 
-
-def web_search(state: GraphState):
-    """Perform web search using Tavily Search API."""
-
-    tavily = TavilySearch(topic="general", max_results=3)
-
-    query = state["messages"][-1].content
-
-    results = tavily.invoke({"query": query})
-
-    return {"context": results}
-
-def create_response(state: GraphState):
-    """Create the educational answer based on combined context."""
-
-    query = state["messages"][-1].content
-    context = state["context"]
-
-    formatted_context = "\n\n".join(
-        f"Fonte {i+1}:\n{doc.page_content}" 
-        for i, doc in enumerate(context)
-    )
-
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system", 
-            "Você é um tutor técnico altamente capacitado e didático. "
-            "Sua missão é responder à pergunta do usuário de forma educativa, clara e estruturada, "
-            "utilizando APENAS as informações fornecidas no Contexto abaixo. "
-            "Siga estas regras:\n"
-            "- Explique os conceitos passo a passo.\n"
-            "- Use formatação (negrito, listas) para facilitar a leitura.\n"
-            "- Se as informações no Contexto não forem suficientes para responder, admita que não sabe "
-            "e não invente informações.\n\n"
-            "Contexto recuperado:\n{context}"
-        ),
-        ("human", "{query}")
-    ])
-
-    chain = prompt | llm_generator
-
-    response = chain.invoke({
-        "context": formatted_context,
-        "query": query
-    })
-
-    return {"messages": [response]}
+    return {"is_relevant": response.is_relevant}
 
 def route_after_relevance(state: GraphState) -> Literal["create_response", "web_search"]:
     """Decide the next node based on relevant evaluation"""
     if state["is_relevant"]:
         return "create_response"
     else:
-        return ["web_search"]
+        return "web_search"
+
+def web_search(state: GraphState):
+    """Perform web search using Tavily Search API and format as Documents."""
+    query = state["query"]
+
+    if isinstance(query, list):
+        parts = []
+        for item in query:
+            if isinstance(item, dict) and "text" in item:
+                parts.append(item["text"])
+        query = " ".join(parts).strip()
+    query = str(query)
+
+    tavily = TavilySearch(topic="general", max_results=3)
+    raw_result = tavily.invoke({"query": query})
+
+    if isinstance(raw_result, dict):
+        results = raw_result.get("results", [])
+    elif isinstance(raw_result, list):
+        results = raw_result
+    else:
+        results = []
+
+    new_docs = []
+    for item in results:
+        content = item.get("content") or item.get("text") or ""
+        url = item.get("url", "")
+        if content:
+            new_docs.append(Document(page_content=content, metadata={"source": url}))
+
+    return {"context": new_docs}
+
+def create_response(state: GraphState):
+    """Create the educational answer based on combined context."""
+
+    query = state["query"]
+    
+    if isinstance(query, list):
+        parts = []
+        for item in query:
+            if isinstance(item, dict) and "text" in item:
+                parts.append(item["text"])
+        query = " ".join(parts).strip()
+    query = str(query)
+
+    docs = state.get("context", [])
+    if not docs:
+        formatted_context = "Nenhum documento foi encontrado."
+    else:
+        formatted_context = "\n\n".join(
+            f"Fonte {i+1}:\n{d.page_content}" for i, d in enumerate(docs)
+        )
+
+    sys_prompt = answer_system_prompt.format(context=formatted_context)
+    response = llm_generator.invoke([
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": query},
+    ])
+
+    return {"messages": [response]}
