@@ -1,225 +1,206 @@
-import operator
-from typing import Annotated, Literal, List
-from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_tavily import TavilySearch
-from langgraph.graph import MessagesState
-from pydantic import BaseModel, Field
-from vector_store import vector_store
+from typing import Annotated, List, Literal, TypedDict, cast
+
 from dotenv import load_dotenv
-from prompts import contextualize_q_system_prompt, evaluator_system_prompt, answer_system_prompt
+from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import END
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
 
 load_dotenv("./.env")
 
+
 class Intent(BaseModel):
-    intent: Literal["casual", "information_seeking"] = Field(
-        description="Classification of user intent. 'casual' for greetings, small talk, identity questions; 'information_seeking' for factual or knowledge-based queries."
+    # 'casual' = greetings, 'general_qa' = specific questions, 'tutoring' = the exercise flow
+    intent: Literal["casual", "general_qa", "tutoring"] = Field(
+        description="Classify intent: 'casual' for greetings; 'general_qa' for generic programming questions; 'tutoring' for the pillar exercise."
     )
 
-class GraphState(MessagesState):
-    context: Annotated[List[Document], operator.add]
-    query: str
-    is_relevant: bool
-    intent: str
 
-class RelevanceDecision(BaseModel):
-    is_relevant: bool = Field(
-        description="Return True if the context is sufficient, correct, and relevant to answer the question. Otherwise, return False."
+class EvaluationResult(BaseModel):
+    approved: bool = Field(
+        description="True if the student met the criteria for the current pillar."
+    )
+    next_action: Literal["advance", "reinforce", "didactic_example"] = Field(
+        description="Action based on student performance."
+    )
+    missing_requirements: List[str] = Field(
+        description="Specific items from the checklist not yet satisfied."
+    )
+    knowledge_score: float = Field(
+        description="0-10 score of the student's current understanding."
+    )
+    internal_feedback: str = Field(
+        description="Technical hint for the tutor node to guide the student."
     )
 
-llm_intent = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    temperature=1.0
-)
 
-llm_intent_structured = llm_intent.with_structured_output(Intent)
+class GraphState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    current_stage: str  # decomposition, pattern, abstraction, algorithm, completed
+    summary: str
+    evaluation_feedback: str
+    # Specific fields to store the 'mental model' or 'subtasks' defined by the student
+    student_artifacts: dict
 
-llm_generator = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    temperature=1.0
-)
 
-llm_evaluator = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    temperature=0.0
-)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+llm_structured_eval = llm.with_structured_output(EvaluationResult)
+llm_structured_intent = llm.with_structured_output(Intent)
 
-llm_evaluator_structured = llm_evaluator.with_structured_output(RelevanceDecision)
 
-def classify_intent(state: GraphState) -> dict:
-    """Classifies the user's intent: casual or information-seeking."""
+def intent_router(state: GraphState):
+    """
+    Decides the path based on user message.
+    Corresponds to the 'router' in your diagrams.
+    """
+    last_msg = state["messages"][-1].content
+    decision = llm_structured_intent.invoke(
+        [
+            {"role": "system", "content": "Classify the user intent strictly."},
+            {"role": "user", "content": last_msg},
+        ]
+    )
 
-    last_msg = state["messages"][-1]
-    raw = last_msg.content
+    decision = cast(Intent, decision)
 
-    if isinstance(raw, list):
-        text_parts = [item["text"] for item in raw if isinstance(item, dict) and "text" in item]
-        user_text = " ".join(text_parts).strip()
+    if decision.intent == "casual":
+        return "casual_node"
+    elif decision.intent == "general_qa":
+        return "general_qa_node"
     else:
-        user_text = str(raw).strip()
+        # If tutoring, route to the current active pillar tutor
+        return state.get("current_stage", "decomposition_node")
 
-    decision = llm_intent_structured.invoke([
-        {"role": "system", "content": "Classify the user's intent in the following message."},
-        {"role": "user", "content": user_text},
-    ])
 
-    return {"intent": decision.intent}
-
-def route_by_intent(state: GraphState) -> Literal["extract_query", "casual_response"]:
-    """Route based on newly classified intent."""
-
-    intent = state.get("intent", "information_seeking")
-    if intent == "casual":
-        return "casual_response"
-    return "extract_query"
-
-def casual_response(state: GraphState) -> dict:
-    "Answers casual questions in a friendly manner, without external context."
-    
-    last_msg = state["messages"][-1]
-    raw = last_msg.content
-
-    if isinstance(raw, list):
-        text_parts = [item["text"] for item in raw if isinstance(item, dict) and "text" in item]
-        user_text = " ".join(text_parts).strip()
-    else:
-        user_text = str(raw).strip()
-
-    response = llm_generator.invoke([
-        {"role": "system", "content": "Você é um assistente amigável. Responda de forma curta e simpática a mensagem do usuário."},
-        {"role": "user", "content": user_text},
-    ])
-
+def casual_node(state: GraphState):
+    """Greetings and small talk."""
+    response = llm.invoke(
+        [
+            {
+                "role": "system",
+                "content": "Respond friendly to the student's greeting.",
+            },
+            {"role": "user", "content": state["messages"][-1].content},
+        ]
+    )
     return {"messages": [response]}
 
-def extract_query(state: GraphState):
-    """Extracts and contextualizes the user's query based on their history."""
-    messages = state["messages"]
-    last_msg = messages[-1]
-    raw_content = last_msg.content
 
-    if isinstance(raw_content, list):
-        parts = []
-        for item in raw_content:
-            if isinstance(item, dict) and "text" in item:
-                parts.append(item["text"])
-        query_string = " ".join(parts).strip()
-    else:
-        query_string = str(raw_content).strip()
+def general_qa_node(state: GraphState):
+    """
+    Corresponds to 'qa_node' or 'Resposta generica'.
+    Handles generic programming/logic questions.
+    """
+    sys_prompt = """You are an expert Programming Tutor. Answer the user's specific question clearly and concisely.
+    After answering, remind them that they can continue their exercise in Computational Thinking."""
 
-    if len(messages) <= 1:
-        return {"query": query_string}
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    return {"messages": [response]}
 
-    sys_msg = SystemMessage(content=contextualize_q_system_prompt)
-    result = llm_evaluator.invoke([sys_msg] + list(messages))
-    contextualized_query = result.content
 
-    if isinstance(contextualized_query, list):
-        parts = []
-        for item in contextualized_query:
-            if isinstance(item, dict) and "text" in item:
-                parts.append(item["text"])
-        contextualized_query = " ".join(parts).strip()
+def decomposition_node(state: GraphState):
+    """Pillar 1: Breaking down complex problems into manageable parts[cite: 119]."""
+    sys_prompt = """You are a Decomposition Assistant. Your goal is to guide the user in fragmenting problems.
+    RULES: 1. Request a single-sentence problem definition. 2. Induce listing subtasks. 3. Test independence.
+    4. Define Inputs/Outputs. 5. Monitor complexity.
+    POSTURE: Socratic, Brief, Analytical."""
 
-    return {"query": contextualized_query}
+    if state.get("evaluation_feedback"):
+        sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
-def retrieve_context(state: GraphState):
-    """Retrieve top documents from ChromaDB Collection bases on query."""
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    return {"messages": [response], "current_stage": "decomposition"}
 
-    query = state["query"]
 
-    if not isinstance(query, str) or not query:
-        return {"context": []}
+def pattern_node(state: GraphState):
+    """Pillar 2: Identifying similarities and regularities[cite: 132]."""
+    sys_prompt = """You are a Pattern Recognition Assistant. Help the user see similarities across subtasks.
+    RULES: 1. Connect to previous subtasks. 2. Search for common characteristics. 3. Focus on effort economy.
+    4. Generalize experience to daily life. 5. Encourage predictability.
+    POSTURE: Socratic, Brief, Focus on Reuse."""
 
-    docs = vector_store.similarity_search(query, k=3)
+    if state.get("evaluation_feedback"):
+        sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
-    return {"context": docs}
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    return {"messages": [response], "current_stage": "pattern"}
 
-def relevance_context(state: GraphState):
-    """Determine whether the retrieved context is relevant and sufficient."""
 
-    query = state["query"]
-    context_docs = state["context"]
+def abstraction_node(state: GraphState):
+    """Pillar 3: Filtering information to focus on the essential[cite: 140]."""
+    sys_prompt = """You are an Abstraction Assistant. Help the user filter essential info from irrelevant noise.
+    RULES: 1. Apply relevance filter. 2. Create mental models (skeletons). 3. Remove noise (names, colors, details).
+    4. Focus on critical variables. 5. Generalize concepts.
+    POSTURE: Socratic, Minimalist, Analytical."""
 
-    if not context_docs:
-        return {"is_relevant": False}
+    if state.get("evaluation_feedback"):
+        sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
-    formatted = "\n\n".join(
-        f"Fonte {i+1}:\n{d.page_content}" for i, d in enumerate(context_docs)
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    return {"messages": [response], "current_stage": "abstraction"}
+
+
+def algorithm_node(state: GraphState):
+    """Pillar 4: Creating ordered steps to solve the problem[cite: 149]."""
+    sys_prompt = """You are an Algorithm Assistant. Guide the user in building a logical step-by-step process.
+    RULES: 1. Logical sequencing. 2. Precision and clarity (Robot-like instructions).
+    3. Conditionals and repetitions. 4. Execution test. 5. Clear finiteness.
+    POSTURE: Socratic, Rigorous, Practical."""
+
+    if state.get("evaluation_feedback"):
+        sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
+
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    return {"messages": [response], "current_stage": "algorithm"}
+
+
+def generic_evaluator(state: GraphState, stage_name: str):
+    """A generic evaluation logic that uses the LLM-as-a-judge for each stage."""
+    eval_prompt = f"""Evaluate the conversation between Mentor and Student for the {stage_name} stage.
+    Check for: Goal synthesis, granularity (min 3 tasks), independence, and I/O interfaces.
+    Return JSON with 'approved', 'next_action', and 'internal_feedback'."""
+
+    decision = llm_structured_eval.invoke(
+        [SystemMessage(content=eval_prompt)] + state["messages"]
     )
 
-    prompt = evaluator_system_prompt.format(context=formatted)
-    response = llm_evaluator_structured.invoke([
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"User Query: {query}\n\nAssess the context and return your decision."},
-    ])
+    decision = cast(EvaluationResult, decision)
 
-    return {"is_relevant": response.is_relevant}
+    return decision
 
-def route_after_relevance(state: GraphState) -> Literal["create_response", "web_search"]:
-    """Decide the next node based on relevant evaluation"""
-    if state["is_relevant"]:
-        return "create_response"
-    else:
-        return "web_search"
 
-def web_search(state: GraphState):
-    """Perform web search using Tavily Search API and format as Documents."""
-    query = state["query"]
+def decomposition_eval(state: GraphState):
+    res = generic_evaluator(state, "Decomposition")
+    return {"evaluation_feedback": res.internal_feedback, "approved": res.approved}
 
-    if isinstance(query, list):
-        parts = []
-        for item in query:
-            if isinstance(item, dict) and "text" in item:
-                parts.append(item["text"])
-        query = " ".join(parts).strip()
-    query = str(query)
 
-    tavily = TavilySearch(topic="general", max_results=3)
-    raw_result = tavily.invoke({"query": query})
+def pattern_eval(state: GraphState):
+    res = generic_evaluator(state, "Pattern Recognition")
+    return {"evaluation_feedback": res.internal_feedback, "approved": res.approved}
 
-    if isinstance(raw_result, dict):
-        results = raw_result.get("results", [])
-    elif isinstance(raw_result, list):
-        results = raw_result
-    else:
-        results = []
 
-    new_docs = []
-    for item in results:
-        content = item.get("content") or item.get("text") or ""
-        url = item.get("url", "")
-        if content:
-            new_docs.append(Document(page_content=content, metadata={"source": url}))
+def abstraction_eval(state: GraphState):
+    res = generic_evaluator(state, "Abstraction")
+    return {"evaluation_feedback": res.internal_feedback, "approved": res.approved}
 
-    return {"context": new_docs}
 
-def create_response(state: GraphState):
-    """Create the educational answer based on combined context."""
+def algorithm_eval(state: GraphState):
+    res = generic_evaluator(state, "Algorithm")
+    return {"evaluation_feedback": res.internal_feedback, "approved": res.approved}
 
-    query = state["query"]
 
-    if isinstance(query, list):
-        parts = []
-        for item in query:
-            if isinstance(item, dict) and "text" in item:
-                parts.append(item["text"])
-        query = " ".join(parts).strip()
-    query = str(query)
+def route_decomposition(state: GraphState):
+    return "pattern_node" if state.get("approved") else "decomposition_node"
 
-    docs = state.get("context", [])
-    if not docs:
-        formatted_context = "Nenhum documento foi encontrado."
-    else:
-        formatted_context = "\n\n".join(
-            f"Fonte {i+1}:\n{d.page_content}" for i, d in enumerate(docs)
-        )
 
-    sys_prompt = answer_system_prompt.format(context=formatted_context)
-    response = llm_generator.invoke([
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": query},
-    ])
+def route_pattern(state: GraphState):
+    return "abstraction_node" if state.get("approved") else "pattern_node"
 
-    return {"messages": [response]}
+
+def route_abstraction(state: GraphState):
+    return "algorithm_node" if state.get("approved") else "abstraction_node"
+
+
+def route_algorithm(state: GraphState):
+    return END if state.get("approved") else "algorithm_node"

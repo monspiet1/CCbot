@@ -1,41 +1,79 @@
-from dotenv import load_dotenv
-from langgraph.graph import StateGraph, START, END
-from nodes import GraphState, casual_response, classify_intent, create_response, extract_query, relevance_context, retrieve_context, route_after_relevance, route_by_intent, web_search
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 
-load_dotenv("./.env")
+from nodes import (
+    GraphState,
+    abstraction_eval,
+    abstraction_node,
+    algorithm_eval,
+    algorithm_node,
+    casual_node,
+    decomposition_eval,
+    decomposition_node,
+    general_qa_node,
+    intent_router,
+    pattern_eval,
+    pattern_node,
+    route_abstraction,
+    route_algorithm,
+    route_decomposition,
+    route_pattern,
+)
 
 workflow = StateGraph(GraphState)
 
-workflow.add_node("classify_intent", classify_intent)
-workflow.add_node("casual_response", casual_response)
-workflow.add_node("extract_query", extract_query)
-workflow.add_node("retrieve_context", retrieve_context)
-workflow.add_node("relevance_context", relevance_context)
-workflow.add_node("web_search", web_search)
-workflow.add_node("create_response", create_response)
-
-workflow.add_edge(START, "classify_intent")
-workflow.add_conditional_edges(
-    "classify_intent",
-    route_by_intent,
-    {"extract_query": "extract_query", "casual_response": "casual_response"}
-)
-workflow.add_edge("casual_response", END)
-
-workflow.add_edge("extract_query", "retrieve_context") 
-workflow.add_edge("retrieve_context", "relevance_context")
+workflow.add_node("casual_node", casual_node)
+workflow.add_node("general_qa_node", general_qa_node)
+workflow.add_node("decomposition_node", decomposition_node)
+workflow.add_node("decomposition_eval", decomposition_eval)
+workflow.add_node("pattern_node", pattern_node)
+workflow.add_node("pattern_eval", pattern_eval)
+workflow.add_node("abstraction_node", abstraction_node)
+workflow.add_node("abstraction_eval", abstraction_eval)
+workflow.add_node("algorithm_node", algorithm_node)
+workflow.add_node("algorithm_eval", algorithm_eval)
 
 workflow.add_conditional_edges(
-    "relevance_context",
-    route_after_relevance,
+    START,
+    intent_router,
     {
-        "create_response": "create_response",
-        "web_search": "web_search"
-    }
+        "casual_node": "casual_node",
+        "general_qa_node": "general_qa_node",
+        "decomposition_node": "decomposition_node",
+        "pattern_node": "pattern_node",
+        "abstraction_node": "abstraction_node",
+        "algorithm_node": "algorithm_node",
+    },
 )
 
-workflow.add_edge("web_search", "create_response")
-workflow.add_edge("create_response", END)
+workflow.add_edge("casual_node", END)
+workflow.add_edge("general_qa_node", END)
+
+workflow.add_edge("decomposition_node", "decomposition_eval")
+workflow.add_conditional_edges(
+    "decomposition_eval",
+    route_decomposition,
+    {"pattern_node": "pattern_node", "decomposition_node": "decomposition_node"},
+)
+
+workflow.add_edge("pattern_node", "pattern_eval")
+workflow.add_conditional_edges(
+    "pattern_eval",
+    route_pattern,
+    {"abstraction_node": "abstraction_node", "pattern_node": "pattern_node"},
+)
+
+workflow.add_edge("abstraction_node", "abstraction_eval")
+workflow.add_conditional_edges(
+    "abstraction_eval",
+    route_abstraction,
+    {"algorithm_node": "algorithm_node", "abstraction_node": "abstraction_node"},
+)
+
+workflow.add_edge("algorithm_node", "algorithm_eval")
+workflow.add_conditional_edges(
+    "algorithm_eval", route_algorithm, {END: END, "algorithm_node": "algorithm_node"}
+)
 
 app = workflow.compile()
 
