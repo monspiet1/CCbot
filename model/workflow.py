@@ -1,4 +1,3 @@
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from nodes import (
@@ -53,26 +52,26 @@ workflow.add_edge("decomposition_node", "decomposition_eval")
 workflow.add_conditional_edges(
     "decomposition_eval",
     route_decomposition,
-    {"pattern_node": "pattern_node", "decomposition_node": "decomposition_node"},
+    {"pattern_node": "pattern_node", "decomposition_node": END},
 )
 
 workflow.add_edge("pattern_node", "pattern_eval")
 workflow.add_conditional_edges(
     "pattern_eval",
     route_pattern,
-    {"abstraction_node": "abstraction_node", "pattern_node": "pattern_node"},
+    {"abstraction_node": "abstraction_node", "pattern_node": END},
 )
 
 workflow.add_edge("abstraction_node", "abstraction_eval")
 workflow.add_conditional_edges(
     "abstraction_eval",
     route_abstraction,
-    {"algorithm_node": "algorithm_node", "abstraction_node": "abstraction_node"},
+    {"algorithm_node": "algorithm_node", "abstraction_node": END},
 )
 
 workflow.add_edge("algorithm_node", "algorithm_eval")
 workflow.add_conditional_edges(
-    "algorithm_eval", route_algorithm, {END: END, "algorithm_node": "algorithm_node"}
+    "algorithm_eval", route_algorithm, {END: END, "algorithm_node": END}
 )
 
 app = workflow.compile()

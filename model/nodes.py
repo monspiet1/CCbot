@@ -13,7 +13,7 @@ load_dotenv("./.env")
 class Intent(BaseModel):
     # 'casual' = greetings, 'general_qa' = specific questions, 'tutoring' = the exercise flow
     intent: Literal["casual", "general_qa", "tutoring"] = Field(
-        description="Classify intent: 'casual' for greetings; 'general_qa' for generic programming questions; 'tutoring' for the pillar exercise."
+        description="Classify intent: 'casual' for greetings; 'general_qa' for explicit out-of-context technical questions; 'tutoring' for answering the tutor or starting an exercise."
     )
 
 
@@ -42,23 +42,45 @@ class GraphState(TypedDict):
     evaluation_feedback: str
     # Specific fields to store the 'mental model' or 'subtasks' defined by the student
     student_artifacts: dict
+    is_tutoring_active: bool
 
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.2)
 llm_structured_eval = llm.with_structured_output(EvaluationResult)
 llm_structured_intent = llm.with_structured_output(Intent)
 
 
 def intent_router(state: GraphState):
-    """
-    Decides the path based on user message.
-    Corresponds to the 'router' in your diagrams.
-    """
-    last_msg = state["messages"][-1].content
+    """Decides the path based on user message intent AND conversation context."""
+    messages = state["messages"]
+    last_user_msg = messages[-1].content
+
+    last_ai_msg = "Nenhuma"
+
+    for m in reversed(messages[:-1]):
+        if m.type == "ai":
+            last_ai_msg = m.content
+            break
+
+    is_active = state.get("is_tutoring_active", False)
+    current_stage = state.get("current_stage", "decomposition_node")
+
+    sys_prompt = f"""Você é um roteador de intenções de um Tutor de IA.
+        CONTEXTO ATUAL:
+        - Exercício de tutoria ativo? {is_active}
+        - Fase atual do exercício: {current_stage}
+        - Última fala da IA: "{last_ai_msg}"
+
+        REGRAS DE CLASSIFICAÇÃO:
+        Se 'Exercício ativo' for True, é altamente provável que o usuário esteja tentando responder a 'Última fala da IA' para continuar o exercício (intent = 'tutoring').
+        SÓ classifique como 'general_qa' se o usuário ignorar completamente a pergunta da IA para fazer uma NOVA pergunta técnica direta (ex: "O que é um array?").
+        Se ele estiver pedindo para começar o exercício, também é 'tutoring'.
+        """
+
     decision = llm_structured_intent.invoke(
         [
-            {"role": "system", "content": "Classify the user intent strictly."},
-            {"role": "user", "content": last_msg},
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": last_user_msg},
         ]
     )
 
@@ -70,7 +92,7 @@ def intent_router(state: GraphState):
         return "general_qa_node"
     else:
         # If tutoring, route to the current active pillar tutor
-        return state.get("current_stage", "decomposition_node")
+        return current_stage
 
 
 def casual_node(state: GraphState):
@@ -88,12 +110,16 @@ def casual_node(state: GraphState):
 
 
 def general_qa_node(state: GraphState):
-    """
-    Corresponds to 'qa_node' or 'Resposta generica'.
-    Handles generic programming/logic questions.
-    """
-    sys_prompt = """You are an expert Programming Tutor. Answer the user's specific question clearly and concisely.
-    After answering, remind them that they can continue their exercise in Computational Thinking."""
+    """Handles generic questions and offers to resume or restart."""
+
+    is_active = state.get("is_tutoring_active", False)
+
+    sys_prompt = """You are an expert Programming Tutor. Answer the user's specific question clearly and concisely."""
+
+    if is_active:
+        sys_prompt += "\n\nAo final da sua resposta, diga exatamente: 'Notei que você tem um exercício de Pensamento Computacional em andamento. Você gostaria de **retomar o exercício anterior** de onde paramos, ou quer **usar essa sua nova dúvida para iniciar um novo fluxo** do zero?'"
+    else:
+        sys_prompt += "\n\nAo final da resposta, lembre-o que ele pode iniciar um exercício de Pensamento Computacional sobre esse ou outro tema a qualquer momento."
 
     response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
     return {"messages": [response]}
@@ -110,7 +136,11 @@ def decomposition_node(state: GraphState):
         sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
     response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
-    return {"messages": [response], "current_stage": "decomposition"}
+    return {
+        "messages": [response],
+        "current_stage": "decomposition_node",
+        "is_tutoring_active": True,
+    }
 
 
 def pattern_node(state: GraphState):
@@ -124,7 +154,11 @@ def pattern_node(state: GraphState):
         sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
     response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
-    return {"messages": [response], "current_stage": "pattern"}
+    return {
+        "messages": [response],
+        "current_stage": "pattern_node",
+        "is_tutoring_active": True,
+    }
 
 
 def abstraction_node(state: GraphState):
@@ -138,7 +172,11 @@ def abstraction_node(state: GraphState):
         sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
     response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
-    return {"messages": [response], "current_stage": "abstraction"}
+    return {
+        "messages": [response],
+        "current_stage": "abstraction_node",
+        "is_tutoring_active": True,
+    }
 
 
 def algorithm_node(state: GraphState):
@@ -152,7 +190,11 @@ def algorithm_node(state: GraphState):
         sys_prompt += f"\n\nEvaluator Instruction: {state['evaluation_feedback']}"
 
     response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
-    return {"messages": [response], "current_stage": "algorithm"}
+    return {
+        "messages": [response],
+        "current_stage": "algorithm_node",
+        "is_tutoring_active": True,
+    }
 
 
 def generic_evaluator(state: GraphState, stage_name: str):
