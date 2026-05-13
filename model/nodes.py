@@ -18,8 +18,11 @@ class Intent(BaseModel):
 
 
 class EvaluationResult(BaseModel):
+    reasoning: str = Field(
+        description="Step-by-step reasoning analyzing if the LAST HUMAN MESSAGE satisfies the CURRENT stage's rubric. Explicitly state if the user is answering a previous question and not the current one."
+    )
     approved: bool = Field(
-        description="True if the student met the criteria for the current pillar."
+        description="True ONLY IF the student met the criteria for the CURRENT pillar. False if they are answering an older stage."
     )
     next_action: Literal["advance", "reinforce", "didactic_example"] = Field(
         description="Action based on student performance."
@@ -268,21 +271,31 @@ def algorithm_node(state: GraphState):
 
 
 def generic_evaluator(state: GraphState, specific_rubric: str):
-    """Executes the LLM-as-a-judge with a specific rubric and structured output."""
-    base_prompt = """You are a Technical Evaluator analyzing the conversation history between a 'Mentor' and a 'Student'.
-        Your goal is to validate if the technical requirements for the current Computational Thinking pillar were met.
+    """Executes the LLM-as-a-judge with a specific rubric and structured output, strictly isolating the human's input."""
+    messages = state["messages"]
+
+    last_human_msg = ""
+    for m in reversed(messages):
+        if m.type == "human":
+            last_human_msg = m.content
+            break
+
+    base_prompt = """You are a Strict Technical Evaluator analyzing a conversation between a 'Mentor' and a 'Student'.
+        Your goal is to validate if the technical requirements for the CURRENT Computational Thinking pillar were met BY THE STUDENT.
+
+        CRITICAL RULES (GATEKEEPER):
+        1. Evaluate ONLY the student's LAST message: "{last_human}"
+        2. BEWARE OF GHOST EVALUATION: The student's last message might be answering the PREVIOUS stage. If the message does not explicitly contain the core objective of the CURRENT rubric, you MUST return approved: false.
+        3. Use the 'reasoning' field to explain your logic first. State clearly if the student is actually answering the current question or just an old one.
 
         EVALUATION RUBRIC:
         {rubric}
-
-        OUTPUT INSTRUCTIONS:
-        Evaluate the student's most recent interactions based on the rubric above.
-        Extract the 'missing_requirements' if they failed. Provide an 'internal_feedback' hint for the Mentor to use in the next interaction.
         """
 
-    sys_prompt = base_prompt.format(rubric=specific_rubric)
+    sys_prompt = base_prompt.format(rubric=specific_rubric, last_human=last_human_msg)
+
     decision = llm_structured_eval.invoke(
-        [SystemMessage(content=sys_prompt)] + state["messages"]
+        [SystemMessage(content=sys_prompt)] + messages
     )
 
     return cast(EvaluationResult, decision)
@@ -314,15 +327,20 @@ def decomposition_eval(state: GraphState):
 
 def pattern_eval(state: GraphState):
     rubric = """
-        - Historical Connection: Did the student relate current subtasks to past experiences or known problems?
-        - Similarity Identification: Did the student point out common characteristics (attributes, behaviors, rules) between the decomposed parts?
-        - Reuse Perception: Did the student demonstrate understanding that a single logic or "mental shortcut" can apply to multiple tasks?
-        - Generalization: Did the student describe the "general rule" or pattern behind the repetitions?
+        ### EVALUATION CRITERIA (CHECKLIST)
+        1. Historical Connection: Did the student relate the current subtasks to past experiences or known problems?
+        2. Similarity Identification: Did the student explicitly point out common characteristics (attributes, behaviors, rules) between the decomposed parts?
+        3. Reuse Perception: Did the student demonstrate an understanding that a single logic or "mental shortcut" can be applied to more than one task?
+        4. Generalization: Did the student formulate and describe the "general rule" or the pattern behind the repetitions?
 
-        CONDITIONAL LOGIC:
-        - IF the student explicitly identified a similarity or associated the problem with a known solution model: Set 'approved': true and 'next_action': 'advance'.
-        - IF the student realized tasks are similar but couldn't explain why or how to reuse the logic: Set 'approved': false and 'next_action': 'reinforce'.
-        - IF the student cannot see any relationship between tasks: Set 'approved': false and 'next_action': 'didactic_example'.
+        ### FATAL EXCEPTION: STAGE MISMATCH (MUST FAIL)
+        If the message does NOT explicitly contain an analogy, a real-world comparison, or a mention of a pattern/similarity, they have NOT answered the Pattern Recognition question yet. You MUST return approved: false.
+        Simply agreeing (e.g., "Yes, it makes sense") is also a FAIL.
+
+        ### STRICT CONDITIONAL LOGIC (GATEKEEPER)
+        - TO APPROVE ('approved': true, 'next_action': 'advance'): The student MUST have explicitly identified a similarity or associated the problem with a known solution model in THEIR OWN WORDS. Simply agreeing with the Mentor (e.g., "Yes, that makes sense", "Exactly") is an automatic FAIL.
+        - TO REINFORCE ('approved': false, 'next_action': 'reinforce_pattern'): If the student realized tasks are similar but could not explain WHY or HOW to reuse the logic.
+        - TO GIVE EXAMPLE ('approved': false, 'next_action': 'didactic_example'): If the student cannot see any relationship between tasks or tries to solve each as an entirely new, unrelated problem.
         """
     res = generic_evaluator(state, rubric)
 
@@ -337,15 +355,16 @@ def pattern_eval(state: GraphState):
 
 def abstraction_eval(state: GraphState):
     rubric = """
-        - Noise Identification: Did the student separate irrelevant info (cosmetic details, specific names) from the core problem?
-        - Critical Variables Definition: Did the student identify fundamental data/components that truly impact the final result?
-        - Simplified Modeling: Did the student describe the "skeleton" or "map" of the problem in a generalized way (e.g., swapping "apples" for "quantities")?
-        - Essentialism: Is the final description minimalist, focusing only on what is necessary to build an algorithm?
+        ### EVALUATION CRITERIA (CHECKLIST)
+        1. Noise Identification: Did the student successfully separate irrelevant information (cosmetic details, specific names, isolated examples) from the core problem?
+        2. Critical Variables Definition: Did the student explicitly identify which data or fundamental components truly impact the final result?
+        3. Simplified Modeling: Did the student describe the "skeleton" or "map" of the problem in a generalized way (e.g., swapping "apples" for "quantities")?
+        4. Essentialism: Is the student's final description minimalist, focusing ONLY on what is strictly necessary to build an algorithm?
 
-        CONDITIONAL LOGIC:
-        - IF the student described the problem simply, containing only strictly necessary elements: Set 'approved': true and 'next_action': 'advance'.
-        - IF the student is attached to specific details or gets lost in long descriptions with "extra" info: Set 'approved': false and 'next_action': 'reinforce'.
-        - IF the student cannot differentiate essential from detail: Set 'approved': false and 'next_action': 'didactic_example'.
+        ### STRICT CONDITIONAL LOGIC (GATEKEEPER)
+        - TO APPROVE ('approved': true, 'next_action': 'advance'): The student MUST have explicitly described the problem in a simplified way, containing ONLY the strictly necessary elements for execution. If the student has not yet produced this "skeleton" sentence, you MUST fail them.
+        - TO REINFORCE ('approved': false, 'next_action': 'reinforce_abstraction'): If the student is still attached to specific details or gets lost in long descriptions containing "extra" or irrelevant information.
+        - TO GIVE EXAMPLE ('approved': false, 'next_action': 'didactic_example'): If the student cannot differentiate what is essential from what is a detail, showing confusion about the "skeleton" of the problem.
         """
     res = generic_evaluator(state, rubric)
 
@@ -360,15 +379,16 @@ def abstraction_eval(state: GraphState):
 
 def algorithm_eval(state: GraphState):
     rubric = """
-        - Sequencing: Are instructions in a correct logical and chronological order?
-        - Determinism (Clarity): Are steps precise enough to be executed by a "robot" without ambiguities?
-        - Flow Control: Did the student consider conditions (IF/THEN) or repetitions (LOOPS) where necessary?
-        - Conclusion (Finiteness): Does the algorithm have a clear stopping point and reach the final goal?
+        ### EVALUATION CRITERIA (CHECKLIST)
+        1. Sequencing: Are the instructions in a correct logical and chronological order?
+        2. Determinism (Clarity): Are the steps precise enough to be executed by a "robot", without ANY ambiguities?
+        3. Flow Control: Did the student consider conditions (IF/THEN) or repetitions (LOOPS) where necessary?
+        4. Conclusion (Finiteness): Does the algorithm have a clear stopping point and successfully reach the final goal defined in the first stage?
 
-        CONDITIONAL LOGIC:
-        - IF the user provided an ordered and complete sequence of instructions leading to the solution: Set 'approved': true and 'next_action': 'advance'.
-        - IF the algorithm is incomplete, out of order, or missing essential logical steps: Set 'approved': false and 'next_action': 'reinforce'.
-        - IF the student doesn't understand how to structure steps or creates overly generic instructions: Set 'approved': false and 'next_action': 'didactic_example'.
+        ### STRICT CONDITIONAL LOGIC (GATEKEEPER)
+        - TO APPROVE ('approved': true, 'next_action': 'advance'): The user MUST have provided a complete, ordered sequence of instructions that logically leads to the solution. If the list is missing, implicit, or just a generic summary, you MUST fail them.
+        - TO REINFORCE ('approved': false, 'next_action': 'reinforce_algorithm'): If the algorithm is incomplete, out of order, or missing essential logical steps.
+        - TO GIVE EXAMPLE ('approved': false, 'next_action': 'didactic_example'): If the student does not understand how to structure steps or creates overly generic instructions (e.g., "just do the task").
         """
     res = generic_evaluator(state, rubric)
 
