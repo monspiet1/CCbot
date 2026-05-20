@@ -98,19 +98,21 @@ def intent_router(state: GraphState):
 
     CLASSIFICATION CATEGORIES:
     1. 'casual': Greetings, small talk, or unrelated non-technical comments.
+
     2. 'tutoring':
        - The user expresses a desire to start a Computational Thinking exercise.
-       - The user is answering the Tutor's Socratic question related to the current stage (e.g., providing a goal definition, listing subtasks, identifying patterns, simplifying details, or creating steps).
-       - The user presents a specific, practical programming, logic, or algorithmic problem to solve (e.g., "How do I implement a queue to manage a hospital?"). These practical challenges MUST be routed to tutoring so the user can be guided to think and solve them step-by-step.
-    3. 'general_qa':
-       - The user asks for a purely theoretical definition, conceptual explanation, or syntax clarification (e.g., "What is an array?").
-       - Do NOT use this for real-world scenarios or logic puzzles.
+       - The user is answering the Tutor's Socratic question related to the current stage.
+       - The user presents a specific problem to solve, build, or implement regarding PROGRAMMING LOGIC, DATA STRUCTURES, or ALGORITHMS (e.g., "How do I implement a queue to manage a hospital?", "Help me create a binary tree", "How do I sort this array?"). These practical challenges MUST be routed to tutoring so the user can be guided to think and solve them step-by-step.
 
-    ROUTING LOGIC:
-    - If 'Tutoring Session Active' is True, assume the user is participating in the exercise (intent = 'tutoring') unless they explicitly pivot to a new purely conceptual question or ignore the Tutor's Socratic prompt entirely.
-    - If the user introduces a real-world problem, a project idea, or a logic puzzle, strictly classify it as 'tutoring' to automatically trigger the Computational Thinking methodology starting with Decomposition.
+    3. 'general_qa':
+       - The user asks for a purely theoretical definition or syntax clarification (e.g., "What is an array?", "Define a Linked List", "What is Big O notation?").
+       - Do NOT use this for implementation requests, real-world scenarios, or logic puzzles.
+
+    ROUTING LOGIC (STRICT RULES):
+    - If 'Tutoring Session Active' is True, assume the user is participating in the exercise (intent = 'tutoring') unless they explicitly pivot to a new purely conceptual question.
+    - If the user asks HOW to build, solve, or implement a Data Structure, Algorithm, or Logic Puzzle, strictly classify it as 'tutoring'. This will automatically trigger the Computational Thinking methodology starting with Decomposition.
+    - Contrast Rule: "What is X?" -> 'general_qa'. "How do I build/use X to solve Y?" -> 'tutoring'.
     - If the user provides a brief answer that fits the last Tutor question, it is strictly 'tutoring'.
-    - If the user asks for a definition or explanation during a tutoring session, classify as 'general_qa' to allow the Tutor to provide a quick theoretical answer before resuming the exercise.
     """
 
     decision = llm_structured_intent.invoke(
