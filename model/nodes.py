@@ -3,9 +3,10 @@ from typing import Annotated, Any, Dict, List, Literal, TypedDict, cast
 from dotenv import load_dotenv
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import END
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+
+from utils.rate_limiter import rate_limited_invoke
 
 load_dotenv("./.env")
 
@@ -115,11 +116,19 @@ def intent_router(state: GraphState):
     - If the user provides a brief answer that fits the last Tutor question, it is strictly 'tutoring'.
     """
 
-    decision = llm_structured_intent.invoke(
+    # decision = llm_structured_intent.invoke(
+    #     [
+    #         {"role": "system", "content": sys_prompt},
+    #         {"role": "user", "content": last_user_msg},
+    #     ]
+    # )
+
+    decision = rate_limited_invoke(
+        llm_structured_intent,
         [
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": last_user_msg},
-        ]
+        ],
     )
 
     decision = cast(Intent, decision)
@@ -142,15 +151,27 @@ def intent_router(state: GraphState):
 
 def casual_node(state: GraphState):
     """Greetings and small talk."""
-    response = llm.invoke(
+    # response = llm.invoke(
+    #     [
+    #         {
+    #             "role": "system",
+    #             "content": "Respond friendly to the student's greeting.",
+    #         },
+    #         {"role": "user", "content": state["messages"][-1].content},
+    #     ]
+    # )
+
+    response = rate_limited_invoke(
+        llm,
         [
             {
                 "role": "system",
                 "content": "Respond friendly to the student's greeting.",
             },
             {"role": "user", "content": state["messages"][-1].content},
-        ]
+        ],
     )
+
     return {"messages": [response]}
 
 
@@ -185,7 +206,11 @@ def general_qa_node(state: GraphState):
         At the end of your explanation, strongly encourage the user to put this concept into practice.
         Ask them if they would like to start a Computational Thinking exercise to discover how to implement or structure this idea step-by-step."""
 
-    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    # response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
 
     # We only return the message. We do NOT change 'is_tutoring_active' or 'current_stage'
     # because if they choose to resume, the state must remain exactly as it was.
@@ -216,7 +241,11 @@ def decomposition_node(state: GraphState):
     if state.get("evaluation_feedback"):
         sys_prompt += f"\n\n### EVALUATOR FEEDBACK (INTERNAL USE ONLY):\n{state['evaluation_feedback']}\nAdjust your next question to specifically address this feedback and guide the user to fix the missing requirements."
 
-    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    # response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
 
     return {
         "messages": [response],
@@ -257,7 +286,11 @@ def pattern_node(state: GraphState):
     if state.get("evaluation_feedback"):
         sys_prompt += f"\n\n### EVALUATOR FEEDBACK (INTERNAL USE ONLY):\n{state['evaluation_feedback']}\nAdjust your next question to address this feedback."
 
-    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    # response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
 
     return {
         "messages": [response],
@@ -299,7 +332,11 @@ def abstraction_node(state: GraphState):
     if state.get("evaluation_feedback"):
         sys_prompt += f"\n\n### EVALUATOR FEEDBACK (INTERNAL USE ONLY):\n{state['evaluation_feedback']}\nAdjust your next question to address this feedback."
 
-    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    # response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
 
     return {
         "messages": [response],
@@ -343,7 +380,12 @@ def algorithm_node(state: GraphState):
     if state.get("evaluation_feedback"):
         sys_prompt += f"\n\n### EVALUATOR FEEDBACK (INTERNAL USE ONLY):\n{state['evaluation_feedback']}\nAdjust your next question to address this feedback."
 
-    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+    # response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
 
     return {
         "messages": [response],
@@ -396,13 +438,23 @@ def generic_evaluator(
     {extraction_instructions}
     """
 
-    decision = llm_structured_eval.invoke(
+    # decision = llm_structured_eval.invoke(
+    #     [
+    #         SystemMessage(content=sys_prompt),
+    #         HumanMessage(
+    #             content="Please evaluate the student's last answer based on the provided context and rubric."
+    #         ),
+    #     ]
+    # )
+
+    decision = rate_limited_invoke(
+        llm_structured_eval,
         [
             SystemMessage(content=sys_prompt),
             HumanMessage(
                 content="Please evaluate the student's last answer based on the provided context and rubric."
             ),
-        ]
+        ],
     )
 
     return cast(EvaluationResult, decision)
@@ -540,6 +592,50 @@ def algorithm_eval(state: GraphState):
     return {"approved": False, "evaluation_feedback": feedback}
 
 
+def completion_node(state: GraphState):
+    """Finaliza a sessão pedagógica após aprovação no pilar Algoritmo."""
+
+    artifacts = state.get("student_artifacts", {})
+
+    sys_prompt = f"""
+    You are an educational assistant finalizing a Computational Thinking tutoring session.
+
+    The student completed all four pillars:
+    - Decomposition
+    - Pattern Recognition
+    - Abstraction
+    - Algorithm
+
+    STUDENT ARTIFACTS:
+    {artifacts}
+
+    Write a brief final response that:
+    1. Confirms that the student completed the reasoning process.
+    2. Summarizes the final solution at a high level.
+    3. Does not introduce a new solution or new code.
+    4. Encourages the student to test the algorithm mentally or with examples.
+    """
+
+    # response = llm.invoke(
+    #     [
+    #         SystemMessage(content=sys_prompt),
+    #         *state["messages"],
+    #     ]
+    # )
+
+    response = rate_limited_invoke(
+        llm,
+        [SystemMessage(content=sys_prompt)] + state["messages"],
+    )
+
+    return {
+        "messages": [response],
+        "is_tutoring_active": False,
+        "approved": True,
+        "evaluation_feedback": "",
+    }
+
+
 def route_decomposition(state: GraphState):
     """Routes based on the Decomposition evaluation result."""
     return "pattern_node" if state.get("approved") else "decomposition_node"
@@ -557,4 +653,4 @@ def route_abstraction(state: GraphState):
 
 def route_algorithm(state: GraphState):
     """Routes based on the final Algorithm evaluation result."""
-    return END if state.get("approved") else "algorithm_node"
+    return "completion_node" if state.get("approved") else "algorithm_node"

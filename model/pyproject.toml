@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "deepeval>=4.0.5",
     "dotenv>=0.9.9",
     "fastapi>=0.136.1",
     "langchain-chroma>=1.1.0",
@@ -17,6 +18,7 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.24",
     "pandas>=3.0.3",
     "plotly>=6.7.0",
+    "pytest>=9.0.3",
     "streamlit>=1.57.0",
     "uvicorn>=0.46.0",
 ]

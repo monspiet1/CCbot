@@ -7,6 +7,7 @@ from nodes import (
     algorithm_eval,
     algorithm_node,
     casual_node,
+    completion_node,
     decomposition_eval,
     decomposition_node,
     general_qa_node,
@@ -24,6 +25,7 @@ workflow = StateGraph(GraphState)
 # Auxiliary Nodes
 workflow.add_node("casual_node", casual_node)
 workflow.add_node("general_qa_node", general_qa_node)
+workflow.add_node("completion_node", completion_node)
 
 # Tutor Nodes (The Socratic questioners)
 workflow.add_node("decomposition_node", decomposition_node)
@@ -71,6 +73,8 @@ workflow.add_edge("decomposition_node", END)
 workflow.add_edge("pattern_node", END)
 workflow.add_edge("abstraction_node", END)
 workflow.add_edge("algorithm_node", END)
+workflow.add_edge("completion_node", END)
+
 
 app = workflow.compile()
 
