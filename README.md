@@ -1,8 +1,8 @@
 # Socratic Wing Tutor: Agente Estocástico de Tutoria baseado no Pensamento Computacional com LangGraph
 
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-blue.svg)](https://langchain-ai.github.io/langgraph/)
-[![LangChain](https://img.shields.io/badge/LangChain-0.3+-green.svg)](https://python.langchain.com/)
-[![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.1.9+-blue.svg)](https://langchain-ai.github.io/langgraph/)
+[![LangChain](https://img.shields.io/badge/LangChain-0.4+-green.svg)](https://python.langchain.com/)
+[![Python](https://img.shields.io/badge/Python-3.12-yellow.svg)](https://www.python.org/)
 [![Google Gemini](https://img.shields.io/badge/Model-Gemini%203.1%20Flash%20Lite-orange.svg)](https://ai.google.dev/)
 [![DeepEval](https://img.shields.io/badge/Evaluation-DeepEval-purple.svg)](https://docs.confident-ai.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -24,16 +24,17 @@ graph TD
     subgraph "Nós de Fluxo Auxiliar"
         IR -- casual --> CAS[Casual Node / Saudação] --> END_C((Fim do Turno))
         IR -- general_qa --> GQA[General QA Node / Dúvida Conceitual] --> END_G((Fim do Turno))
-    ]
+    end
     
     subgraph "Ciclo Socrático & Avaliação de Gatekeeper"
-        IR -- "tutoring (start)" --> TUT[Tutor Nodes<br/>Decomposition / Pattern / Abstraction / Algorithm]
-        IR -- "tutoring (answer)" --> EVAL[Evaluator Nodes<br/>LLM-as-a-Judge + Blackboard Extraction]
+        IR -->|tutoring start| TUT[Tutor Nodes<br/>Decomposition / Pattern / Abstraction / Algorithm]
+        IR -->|tutoring answer| EVAL[Evaluator Nodes<br/>LLM-as-a-Judge + Blackboard Extraction]
         
         TUT --> END_T((Fim do Turno - Aguarda Aluno))
         
-        EVAL -- "Reprovado (Gera Feedback Interno)" --> TUT
-        EVAL -- "Aprovado (Extrai para Blackboard)" --> NEXT[Próximo Pilar do Pensamento Computacional]
+        EVAL -->|Reprovado - Gera Feedback Interno| TUT
+        EVAL -->|Aprovado - Extrai para Blackboard| NEXT[Próximo Pilar do Pensamento Computacional]
+        NEXT --> TUT
     end
 ```
 

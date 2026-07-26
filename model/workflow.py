@@ -8,6 +8,7 @@ from nodes import (
     casual_node,
     decomposition_eval,
     decomposition_node,
+    final_summary_node,
     general_qa_node,
     intent_router,
     pattern_eval,
@@ -35,6 +36,9 @@ workflow.add_node("decomposition_eval", decomposition_eval)
 workflow.add_node("pattern_eval", pattern_eval)
 workflow.add_node("abstraction_eval", abstraction_eval)
 workflow.add_node("algorithm_eval", algorithm_eval)
+
+# Final Synthesis Node
+workflow.add_node("final_summary_node", final_summary_node)
 
 workflow.add_conditional_edges(
     START,
@@ -70,6 +74,7 @@ workflow.add_edge("decomposition_node", END)
 workflow.add_edge("pattern_node", END)
 workflow.add_edge("abstraction_node", END)
 workflow.add_edge("algorithm_node", END)
+workflow.add_edge("final_summary_node", END)
 
 app = workflow.compile()
 

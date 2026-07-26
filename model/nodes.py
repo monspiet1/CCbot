@@ -11,6 +11,7 @@ from prompts import (
     CASUAL_NODE_PROMPT,
     DECOMPOSITION_NODE_PROMPT,
     EVALUATOR_PROMPT,
+    FINAL_SUMMARY_NODE_PROMPT,
     GENERAL_QA_CONTINUATION_ACTIVE,
     GENERAL_QA_CONTINUATION_INACTIVE,
     GENERAL_QA_NODE_PROMPT,
@@ -405,4 +406,35 @@ def route_abstraction(state: GraphState):
 
 def route_algorithm(state: GraphState):
     """Routes based on the final Algorithm evaluation result."""
-    return END if state.get("approved") else "algorithm_node"
+    return "final_summary_node" if state.get("approved") else "algorithm_node"
+
+
+def final_summary_node(state: GraphState):
+    """Metacognitive synthesis node: Consolidates the Computational Thinking journey and presents the final resolution."""
+    artifacts = state.get("student_artifacts", {})
+    decomp = artifacts.get("decomposition", {})
+    pattern = artifacts.get("pattern", {})
+    abstract = artifacts.get("abstraction", {})
+    algo = artifacts.get("algorithm", {})
+
+    sys_prompt = FINAL_SUMMARY_NODE_PROMPT.format(
+        decomp_goal=decomp.get("goal", "Not defined"),
+        decomp_subtasks=decomp.get("subtasks", []),
+        pattern_identified_similarity=pattern.get("identified_similarity", "Not defined"),
+        pattern_general_rule=pattern.get("general_rule", "Not defined"),
+        abstract_core_variables=abstract.get("core_variables", []),
+        abstract_ignored_noise=abstract.get("ignored_noise", []),
+        abstract_simplified_model=abstract.get("simplified_model", "Not defined"),
+        algo_ordered_steps=algo.get("ordered_steps", []),
+        algo_conditions_or_loops=algo.get("conditions_or_loops", "Not defined"),
+        algo_end_condition=algo.get("end_condition", "Not defined"),
+    )
+
+    response = llm.invoke([SystemMessage(content=sys_prompt)] + state["messages"])
+
+    return {
+        "messages": [response],
+        "is_tutoring_active": False,
+        "current_stage": "completed",
+        "approved": True,
+    }
