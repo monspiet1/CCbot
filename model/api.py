@@ -5,9 +5,8 @@ from fastapi import FastAPI, HTTPException
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
-from pydantic import BaseModel
-
 from nodes import GraphState
+from pydantic import BaseModel
 from workflow import workflow
 
 checkpoint_conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
