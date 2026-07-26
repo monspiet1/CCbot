@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 load_dotenv("./.env")
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_REQUEST_TIMEOUT = 30.0

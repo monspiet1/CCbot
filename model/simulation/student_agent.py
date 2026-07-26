@@ -1,7 +1,7 @@
 import random
 from typing import List
 
-from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 
 from llm_factory import get_llm
 from simulation.schema import StudentProfile
@@ -27,6 +27,19 @@ BEHAVIOR_ERROR = """
 
 BEHAVIOR_COLLABORATIVE = """
 - COMPORTAMENTO ATUAL: Colabore ativamente com a solicitação do tutor, respondendo de forma lógica e alinhada a um estudante com nível de conhecimento {knowledge_level}."""
+
+
+def _ensure_last_message_is_human(messages: List[AnyMessage]) -> List[AnyMessage]:
+    """Garante que a última mensagem seja um HumanMessage para compatibilidade com Gemini."""
+    if not messages:
+        return [HumanMessage(content="Por favor, comece sua resposta.")]
+
+    last_msg = messages[-1]
+    if isinstance(last_msg, AIMessage):
+        return messages[:-1] + [
+            HumanMessage(content="Por favor, responda à pergunta anterior do Tutor.")
+        ]
+    return messages
 
 
 def run_student_turn(
@@ -55,7 +68,8 @@ def run_student_turn(
 
     llm = get_llm(temperature=0.7)
 
-    invocation_messages = [SystemMessage(content=sys_prompt)] + messages[-6:]
+    context_messages = _ensure_last_message_is_human(messages[-6:])
+    invocation_messages = [SystemMessage(content=sys_prompt)] + context_messages
     response = llm.invoke(invocation_messages)
 
     return response.content if isinstance(response.content, str) else str(response.content)
