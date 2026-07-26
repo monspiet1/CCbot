@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import random
 import time
@@ -7,6 +8,12 @@ from typing import List
 from profiles import PROFILES
 from simulation.orchestrator import SimulationOrchestrator
 from simulation.schema import StudentProfile
+
+
+def append_session_to_jsonl(session: dict, filepath: str) -> None:
+    """Salva uma sessão no arquivo JSONL (modo append)."""
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(json.dumps(session, ensure_ascii=False) + "\n")
 
 
 def distribute_sessions_uniformly(
@@ -23,7 +30,12 @@ def distribute_sessions_uniformly(
     return distribution[:num_sessions]
 
 
-def run_batch_simulation(num_sessions: int = 15, seed: int | None = None, delay: float = 65.0) -> List[dict]:
+def run_batch_simulation(
+    num_sessions: int = 15,
+    seed: int | None = None,
+    delay: float = 65.0,
+    output_path: str = "dataset_ct_tutoring.jsonl",
+) -> List[dict]:
     """Executa simulações em batch com distribuição uniforme de perfis."""
     if seed is not None:
         random.seed(seed)
@@ -38,6 +50,7 @@ def run_batch_simulation(num_sessions: int = 15, seed: int | None = None, delay:
     print(f"Total de sessões: {num_sessions}")
     print(f"Distribuição uniforme: {len(profiles)} sessões")
     print(f"Delay entre requisições LLM: {delay}s")
+    print(f"Arquivo de saída: {output_path}")
     print(f"{'='*60}\n")
 
     start_time = time.time()
@@ -48,6 +61,9 @@ def run_batch_simulation(num_sessions: int = 15, seed: int | None = None, delay:
 
         result = orchestrator.simulate_session(profile, session_id)
         sessions.append(result)
+
+        append_session_to_jsonl(result, output_path)
+        print(f"  Sessão salva em {output_path}")
 
         elapsed = time.time() - start_time
         avg_time = elapsed / (i + 1)
@@ -103,10 +119,12 @@ def main():
         print("Erro: O número de sessões deve ser maior que 0.")
         return
 
-    sessions = run_batch_simulation(num_sessions=args.num_sessions, seed=args.seed, delay=args.delay)
-
-    orchestrator = SimulationOrchestrator()
-    orchestrator.export_dataset_jsonl(sessions, filepath=args.output)
+    sessions = run_batch_simulation(
+        num_sessions=args.num_sessions,
+        seed=args.seed,
+        delay=args.delay,
+        output_path=args.output,
+    )
 
     completed = sum(1 for s in sessions if s["completed"])
     print(f"\nResumo:")
