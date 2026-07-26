@@ -12,8 +12,9 @@ from workflow import app as tutor_app
 class SimulationOrchestrator:
     """Orquestrador dual-agent que coordena o loop de retroalimentação entre o TutorGraph e o StudentAgent."""
 
-    def __init__(self, max_turns_per_session: int = 15):
+    def __init__(self, max_turns_per_session: int = 15, delay_between_requests: float = 65.0):
         self.max_turns = max_turns_per_session
+        self.delay = delay_between_requests
 
     def simulate_session(
         self, profile: StudentProfile, session_id: str
@@ -46,6 +47,9 @@ class SimulationOrchestrator:
             for event in tutor_app.stream(state):
                 for node_name, node_data in event.items():
                     tutor_output_state = node_data
+
+            print(f"  [Delay] Aguardando {self.delay}s após chamada do Tutor...")
+            time.sleep(self.delay)
 
             if tutor_output_state:
                 if "messages" in tutor_output_state:
@@ -91,6 +95,9 @@ class SimulationOrchestrator:
             )
             print(f"[Aluno -> Tutor]: {student_reply[:100]}...")
 
+            print(f"  [Delay] Aguardando {self.delay}s após chamada do Aluno...")
+            time.sleep(self.delay)
+
             state["messages"].append(HumanMessage(content=student_reply))
 
             session_trace.append(
@@ -101,8 +108,6 @@ class SimulationOrchestrator:
                     "content": student_reply,
                 }
             )
-
-            time.sleep(1)
 
         return {
             "session_id": session_id,
