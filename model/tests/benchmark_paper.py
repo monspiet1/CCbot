@@ -1,10 +1,13 @@
+import argparse
 import ast
 import json
 import os
 import sys
+import time
 
 import pandas as pd
 from deepeval import evaluate
+from deepeval.evaluate.configs import AsyncConfig, DisplayConfig
 from deepeval.test_case import LLMTestCase
 from typing import List
 
@@ -68,10 +71,54 @@ def load_dataset_as_test_cases(jsonl_filepath: str) -> List[LLMTestCase]:
     return test_cases
 
 
-def run_paper_benchmark(jsonl_filepath: str = "dataset_ct_tutoring.jsonl"):
-    """Executa a suíte psicométrica completa via DeepEval e exporta tabelas consolidadas para o artigo."""
+def _evaluate_with_retry(
+    batch: List[LLMTestCase],
+    metrics: List,
+    batch_size: int,
+    max_attempts: int = 5,
+    retry_delay: float = 70.0,
+):
+    """Avalia um lote com retries para erros transitórios da API (429/503)."""
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return evaluate(
+                test_cases=batch,
+                metrics=metrics,
+                async_config=AsyncConfig(
+                    run_async=True, max_concurrent=batch_size
+                ),
+                display_config=DisplayConfig(
+                    show_indicator=False,
+                    print_results=False,
+                    inspect_after_run=False,
+                ),
+            )
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"--- Erro transitório ({type(exc).__name__}) na tentativa "
+                f"{attempt + 1}/{max_attempts} | aguardando {retry_delay:.0f}s ---"
+            )
+            time.sleep(retry_delay)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Falha inesperada: nenhuma exceção capturada durante a avaliação.")
+
+
+def run_paper_benchmark(
+    jsonl_filepath: str = "dataset_ct_tutoring.jsonl",
+    max_cases: int | None = None,
+    batch_size: int = 3,
+    sleep_between_batches: float = 65.0,
+):
+    """Executa a suíte psicométrica completa via DeepEval e exporta tabelas consolidadas para o artigo.
+    O processamento é feito em lotes com pausa entre eles para respeitar o limite de requisições
+    do Gemini (free tier: ~15 req/min por modelo)."""
     print("--- Iniciando carregamento do dataset e montagem dos casos de teste ---")
     test_cases = load_dataset_as_test_cases(jsonl_filepath)
+    if max_cases is not None:
+        test_cases = test_cases[:max_cases]
     print(
         f"--- Total de turnos pedagógicos isolados para avaliação: {len(test_cases)} ---"
     )
@@ -84,10 +131,21 @@ def run_paper_benchmark(jsonl_filepath: str = "dataset_ct_tutoring.jsonl"):
     metrics = [socratic_metric, scaffolding_metric, progression_metric, relevancy_metric]
 
     print("--- Executando julgamento automatizado via DeepEval (LLM-as-a-Judge) ---")
-    results = evaluate(test_cases=test_cases, metrics=metrics)
+    all_test_results = []
+    for start in range(0, len(test_cases), batch_size):
+        batch = test_cases[start : start + batch_size]
+        results = _evaluate_with_retry(batch, metrics, batch_size)
+        all_test_results.extend(results.test_results)
+        remaining = len(test_cases) - (start + len(batch))
+        if remaining > 0:
+            print(
+                f"--- Lote de {len(batch)} casos avaliado | avaliados {start + len(batch)}/{len(test_cases)} "
+                f"| pausa de {sleep_between_batches:.0f}s para respeitar a cota da API ---"
+            )
+            time.sleep(sleep_between_batches)
 
     data_rows = []
-    for test_result in results.test_results:
+    for test_result in all_test_results:
         row = {
             "input_student": str(test_result.input)[:60] + "...",
             "output_tutor": str(test_result.actual_output)[:60] + "...",
@@ -106,9 +164,23 @@ def run_paper_benchmark(jsonl_filepath: str = "dataset_ct_tutoring.jsonl"):
     print("--- Síntese Estatística para Seção de Resultados do Artigo ---")
     summary = {}
     for m in metrics:
-        score_col = f"{m.name} (Score)"
-        success_col = f"{m.name} (Success)"
-        if score_col in df_results.columns:
+        score_col = next(
+            (
+                c
+                for c in df_results.columns
+                if c.startswith(f"{m.name} ") and c.endswith(" (Score)")
+            ),
+            None,
+        )
+        success_col = next(
+            (
+                c
+                for c in df_results.columns
+                if c.startswith(f"{m.name} ") and c.endswith(" (Success)")
+            ),
+            None,
+        )
+        if score_col is not None and success_col is not None:
             mean_score = df_results[score_col].mean()
             std_score = df_results[score_col].std()
             pass_rate = (df_results[success_col].sum() / len(df_results)) * 100
@@ -118,10 +190,45 @@ def run_paper_benchmark(jsonl_filepath: str = "dataset_ct_tutoring.jsonl"):
             }
 
     df_summary = pd.DataFrame(summary).T
+    df_summary.index.name = "Metric"
     print(df_summary.to_string())
     df_summary.to_csv("paper_benchmark_summary_table.csv")
     print("--- Validação concluída: Arquivos CSV de benchmark gerados com êxito ---")
 
 
 if __name__ == "__main__":
-    run_paper_benchmark()
+    parser = argparse.ArgumentParser(
+        description="Benchmark psicométrico do Socratic CT-Tutor via DeepEval."
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="dataset_ct_tutoring.jsonl",
+        help="Caminho para o dataset JSONL de telemetria (default: dataset_ct_tutoring.jsonl).",
+    )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="Limita o número de turnos pedagógicos avaliados (pilot/amostra).",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=3,
+        help="Casos de teste por lote (padrão 3 = 12 chamadas LLM por lote).",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=65.0,
+        help="Pausa em segundos entre lotes para respeitar a cota da API (padrão 65s).",
+    )
+    args = parser.parse_args()
+
+    run_paper_benchmark(
+        jsonl_filepath=args.dataset,
+        max_cases=args.max_cases,
+        batch_size=args.batch_size,
+        sleep_between_batches=args.sleep,
+    )

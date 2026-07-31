@@ -24,6 +24,12 @@ def get_socratic_alignment_metric() -> GEval:
         3. If the student explicitly demands the code or immediate answer, the Tutor must politely decline, explain the pedagogical reason, and pivot back to a guided inquiry.
         4. Assess if the Tutor's tone remains encouraging, concise, and analytical.
         """,
+        evaluation_steps=[
+            "Check whether the Tutor refused to provide direct code implementations, ready-made algorithms, or final solutions.",
+            "Verify that the Tutor formulated guided questions that stimulate the student to decompose and reason independently.",
+            "Confirm the Tutor politely declined any demand for code or immediate answers and pivoted back to guided inquiry.",
+            "Assess if the Tutor's tone remains encouraging, concise, and analytical.",
+        ],
         evaluation_params=[
             SingleTurnParams.INPUT,
             SingleTurnParams.ACTUAL_OUTPUT,
@@ -45,6 +51,11 @@ def get_scaffolding_effectiveness_metric() -> GEval:
         2. Verify if the AI Tutor's subsequent response directly targets the conceptual gaps listed in the evaluation feedback.
         3. Ensure that the Tutor reformulated the inquiry or introduced a pedagogical analogy to assist the student in overcoming the obstacle without spoiling the solution.
         """,
+        evaluation_steps=[
+            "Analyze the Retrieval Context, which contains the internal evaluation feedback identifying the exact requirements missed by the student.",
+            "Verify that the Tutor's subsequent response directly targets the conceptual gaps listed in the evaluation feedback.",
+            "Confirm the Tutor reformulated the inquiry or introduced a pedagogical analogy without revealing the solution.",
+        ],
         evaluation_params=[
             SingleTurnParams.INPUT,
             SingleTurnParams.ACTUAL_OUTPUT,
@@ -67,6 +78,11 @@ def get_pedagogical_progression_metric() -> GEval:
         2. Check if the transition between stages is coherent and naturally triggered by the completion of the prior pillar.
         3. Ensure that no foundational stage of Computational Thinking was skipped or prematurely closed.
         """,
+        evaluation_steps=[
+            "Verify that the Tutor accurately builds upon the student's previously consolidated concepts stored in the Blackboard artifacts.",
+            "Check if the transition between stages is coherent and naturally triggered by the completion of the prior pillar.",
+            "Ensure that no foundational stage of Computational Thinking was skipped or prematurely closed.",
+        ],
         evaluation_params=[
             SingleTurnParams.INPUT,
             SingleTurnParams.ACTUAL_OUTPUT,
@@ -89,6 +105,11 @@ def get_contextual_relevancy_metric() -> GEval:
         2. Check if the response appropriately leverages the Blackboard artifacts (previously approved concepts) without introducing unrelated topics.
         3. Assess whether the response contains only information that is pertinent to the ongoing tutoring session.
         """,
+        evaluation_steps=[
+            "Check whether the Tutor's response directly addresses the student's input given the current Computational Thinking stage.",
+            "Verify the response appropriately leverages the Blackboard artifacts without introducing unrelated topics.",
+            "Assess whether the response contains only information pertinent to the ongoing tutoring session.",
+        ],
         evaluation_params=[
             SingleTurnParams.INPUT,
             SingleTurnParams.ACTUAL_OUTPUT,
