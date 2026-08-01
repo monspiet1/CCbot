@@ -70,6 +70,26 @@
 - Estimativa para o piloto completo (112 casos × 4 métricas = 448 chamadas): ~45 min no ritmo de ~10 chamadas/min impostos pela cota do free tier
 - Pendência: executar o benchmark completo (112 casos) e/ou regenerar o dataset oficial (≥10 sessões completas) antes da avaliação final
 
+### 2026-08-01 - Refatoração Anti-Loop do Agente Aluno (Fase 2)
+- Diagnóstico: as 8 sessões do dataset estavam TODAS travadas em `decomposition` (`completed=False`, 15 turnos) — a estocasticidade do aluno rejeitava o feedback do tutor indefinidamente, causando loop infinito de simulação
+- `simulation/student_agent.py` refatorado conforme AGENTS.md Seção 3.1:
+  - `BEHAVIOR_COLLABORATIVE` atualizado com reflexão interna + Chain of Thought (perfil dedicado/curioso, pergunta conectada se não entender, raciocínio passo a passo)
+  - Novo `BEHAVIOR_COMPREHENSION` (substitui o antigo "Aha! Moment"): aluno declara "Entendi!", agradece a dica e formula a resposta exata/correta esperada pelo Tutor
+  - Nova constante `MAX_ATTEMPTS_PER_STAGE = 2` (Progressão Cognitiva)
+  - Nova assinatura `run_student_turn(messages, profile, current_stage, attempts_in_stage)`: após `MAX_ATTEMPTS_PER_STAGE` falhas na mesma fase, força o Comprehension; caso contrário, mantém a ramificação estocástica (impaciente/erro/colaborativo)
+  - `_ensure_last_message_is_human()` preservada intacta
+- `simulation/orchestrator.py`: adicionado rastreador `attempts_in_current_stage` que incrementa quando o estágio permanece o mesmo sem aprovação e reseta ao mudar de estágio/aprovar; contagem exibida no print do Aluno; chamada nomeada com `attempts_in_stage`
+- `AGENTS.md`: renomeadas as 3 ocorrências de "Aha! Moment" → "Comprehension" (linhas 138, 178-180, 198), mantendo intactas as atualizações da Fase 4
+- Validação (sem rede): `py_compile` OK nos dois arquivos; teste de ramificação via mock (`unittest.mock.patch`) cobrindo colaborativo/CoT, impaciente, Comprehension (`attempts=2` e `=5`, independente de `random`), instanciação do `SimulationOrchestrator` e constante `MAX_ATTEMPTS_PER_STAGE` — 8 asserções passaram
+
+### 2026-08-01 - Fix Crítico do Loop Infinito (Amnésia + Paradoxo Micro/Macro)
+- **Diagnóstico de logs (2 causas raiz do loop em `decomposition`):**
+  1. **Amnésia (mutação de estado):** `orchestrator.py` sobrescrevia `state["messages"]` com o update do último nó — em modo `updates`, o LangGraph entrega no canal `messages` apenas as mensagens NOVAS do nó (ex.: `[AIMessage]`), não o acumulado. O histórico virava só o último turno a cada iteração (Tutor e Aluno perdiam contexto; o `decomposition_eval` avaliava respostas isoladas sem progresso).
+  2. **Paradoxo Micro vs. Macro:** `BEHAVIOR_COMPREHENSION` instruía o aluno a responder APENAS a pergunta micro do Tutor (uma subtarefa), enquanto a rubrica do avaliador exige a síntese MACRO completa (goal + todas as subtarefas + I/O de cada uma). Resposta micro nunca passa no Gatekeeper → loop.
+- **Fix 1 (`simulation/orchestrator.py`):** atribuição `state["messages"] = ...` substituída por `state["messages"].extend(tutor_output_state["messages"])` — o histórico passa a acumular integralmente (estado passado ao grafo cresce de `[Human(initial)]` a `[..., AI_n, S_n]` a cada turno). Validado: todo nó terminal do grafo retorna `"messages"` (casual/general_qa/tutores/final_summary) e avaliadores não retornam `"messages"`, logo o último evento captura todas as mensagens novas; apenas um nó produtor por rodada → sem duplicação.
+- **Fix 2 (`simulation/student_agent.py`):** `BEHAVIOR_COMPREHENSION` substituído integralmente pelo texto MACRO da Seção 3.2 do AGENTS.md (síntese COMPLETA e ESTRUTURADA; regras por estágio: objetivo + subtarefas + Input/Output na Decomposição, regra geral em Padrões, variáveis/modelo em Abstração, passo a passo/loops/parada em Algoritmo). Impaciência/erro/colaborativo inalterados.
+- Validação (sem rede): `py_compile` OK; teste de ramificação (Comprehension macro contém "síntese COMPLETA e ESTRUTURADA" e "Entrada (Input) e Saída (Output)"; impaciente/erro/CoT preservados); novo teste do orquestrador com `tutor_app.stream` mockado (4 iterações) confirma crescimento monotônico de mensagens `[1→3→5→7]` sem perda nem duplicação, trace completo e semântica de `completed` preservada
+
 ## Decisões Arquiteturais
 
 | Data | Decisão | Justificativa |
@@ -96,6 +116,10 @@
 | 2026-07-31 | Lotes pequenos (2 casos) + pausa de 70s entre lotes | Respeita o limite de 15 req/min do free tier; rajadas maiores geram 429 |
 | 2026-07-31 | Retry automático em erros transitórios (429/503) | API do Gemini retorna 503 `UNAVAILABLE` de forma intermitente; 5 tentativas com 70s de espera |
 | 2026-07-31 | Localizar colunas por prefixo na síntese estatística | `metric_data.name` do DeepEval inclui sufixo `[GEval]`, inviabilizando match direto por `m.name` |
+| 2026-08-01 | Mecanismo de Progressão Cognitiva com `MAX_ATTEMPTS_PER_STAGE = 2` | Interrompe loop infinito de simulação: após 2 falhas na mesma fase o aluno é forçado a demonstrar Comprehension e destrava o pilar |
+| 2026-08-01 | Renomear "Aha! Moment" para "Comprehension" | Terminologia profissional para o artigo científico; `BEHAVIOR_COMPREHENSION` no código e AGENTS.md |
+| 2026-08-01 | Acumular `messages` via `.extend()` em vez de atribuição direta | Em modo `updates` do `stream()`, o canal `messages` entrega só as mensagens novas do nó; atribuição causava amnésia a cada turno |
+| 2026-08-01 | `BEHAVIOR_COMPREHENSION` = síntese MACRO da Seção 3.2 | Rubrica do avaliador exige goal + subtarefas + I/O completos; resposta micro à pergunta do Tutor nunca passava no Gatekeeper |
 
 ## Checklist - Fase 1 (AGENTS.md Seção 6)
 
@@ -138,8 +162,12 @@
 | `simulation/schema.py` | Novo | Modelo Pydantic `StudentProfile` |
 | `simulation/student_agent.py` | Novo | Função `run_student_turn()` com lógica estocástica |
 | `simulation/student_agent.py` | Atualizado | Adicionada função `_ensure_last_message_is_human()` para correção de bug Gemini |
+| `simulation/student_agent.py` | Atualizado | Anti-loop: `BEHAVIOR_COLLABORATIVE` com CoT, novo `BEHAVIOR_COMPREHENSION`, `MAX_ATTEMPTS_PER_STAGE = 2`, assinatura com `attempts_in_stage` |
+| `simulation/student_agent.py` | Atualizado | Fix loop: `BEHAVIOR_COMPREHENSION` com síntese MACRO completa (AGENTS.md Seção 3.2) para passar no Gatekeeper |
 | `simulation/orchestrator.py` | Novo | Classe `SimulationOrchestrator` para loop dual-agent |
 | `simulation/orchestrator.py` | Atualizado | Removido delay entre sessões |
+| `simulation/orchestrator.py` | Atualizado | Rastreador `attempts_in_current_stage` anti-loop; chamada nomeada com `attempts_in_stage` |
+| `simulation/orchestrator.py` | Atualizado | Fix amnésia: acúmulo do histórico via `state["messages"].extend(...)` em vez de atribuição |
 | `profiles.py` | Novo | 4 perfis discentes pré-configurados |
 | `run_simulation.py` | Novo | Script CLI para execução de simulações em batch com delay configurável |
 | `run_simulation.py` | Atualizado | Salvamento incremental com `append_session_to_jsonl()` |
@@ -151,4 +179,5 @@
 | `paper_benchmark_detailed_results.csv` | Gerado | Piloto (8 casos): scores/success/reasoning por métrica |
 | `paper_benchmark_summary_table.csv` | Gerado | Piloto (8 casos): média (0.0–1.0) e taxa de sucesso por métrica |
 | `AGENTS.md` | Atualizado | Modelo `gemini-3.5-flash-lite`; `SingleTurnParams`; `ContextualRelevancyMetric`; instância `GeminiModel` no blueprint da Seção 5.1; checklist Fase 4 |
+| `AGENTS.md` | Atualizado | "Aha! Moment" → "Comprehension" nas 3 ocorrências da Seção 3.1 (`BEHAVIOR_COMPREHENSION`) |
 | `PROGRESS.md` | Atualizado | Este arquivo |

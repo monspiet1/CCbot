@@ -12,7 +12,9 @@ from workflow import app as tutor_app
 class SimulationOrchestrator:
     """Orquestrador dual-agent que coordena o loop de retroalimentação entre o TutorGraph e o StudentAgent."""
 
-    def __init__(self, max_turns_per_session: int = 15, delay_between_requests: float = 65.0):
+    def __init__(
+        self, max_turns_per_session: int = 15, delay_between_requests: float = 65.0
+    ):
         self.max_turns = max_turns_per_session
         self.delay = delay_between_requests
 
@@ -38,6 +40,8 @@ class SimulationOrchestrator:
         turn_count = 0
         session_trace: List[Dict[str, Any]] = []
         is_completed = False
+        attempts_in_current_stage = 0
+        last_stage = state["current_stage"]
 
         while turn_count < self.max_turns:
             turn_count += 1
@@ -53,7 +57,7 @@ class SimulationOrchestrator:
 
             if tutor_output_state:
                 if "messages" in tutor_output_state:
-                    state["messages"] = tutor_output_state["messages"]
+                    state["messages"].extend(tutor_output_state["messages"])
                 for key in [
                     "current_stage",
                     "is_tutoring_active",
@@ -63,6 +67,12 @@ class SimulationOrchestrator:
                 ]:
                     if key in tutor_output_state:
                         state[key] = tutor_output_state[key]
+
+            if state["current_stage"] == last_stage and not state["approved"]:
+                attempts_in_current_stage += 1
+            else:
+                attempts_in_current_stage = 0
+                last_stage = state["current_stage"]
 
             last_ai_msg = state["messages"][-1].content
             if isinstance(last_ai_msg, list):
@@ -89,11 +99,18 @@ class SimulationOrchestrator:
                 is_completed = True
                 break
 
-            print(f"[Turno {turn_count}] Processando resposta cognitiva do Agente Aluno...")
-            student_reply = run_student_turn(
-                state["messages"], profile, state["current_stage"]
+            print(
+                f"[Turno {turn_count}] Processando resposta cognitiva do Agente Aluno..."
             )
-            print(f"[Aluno -> Tutor]: {student_reply[:100]}...")
+            student_reply = run_student_turn(
+                messages=state["messages"],
+                profile=profile,
+                current_stage=state["current_stage"],
+                attempts_in_stage=attempts_in_current_stage,
+            )
+            print(
+                f"[Aluno -> Tutor (tentativa {attempts_in_current_stage} no estágio)]: {student_reply[:100]}..."
+            )
 
             print(f"  [Delay] Aguardando {self.delay}s após chamada do Aluno...")
             time.sleep(self.delay)

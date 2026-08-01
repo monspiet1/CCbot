@@ -135,90 +135,107 @@ def route_algorithm(state: GraphState):
 
 ## 3. Arquitetura e Implementação do Agente Aluno (Student Agent)
 
-Para validar experimentalmente a eficácia pedagógica do sistema socrático e gerar evidências empíricas em larga escala, é impraticável depender exclusivamente de testes manuais. Para tanto, é obrigatório desenvolver um Agente Aluno Estocástico parametrizado, capaz de simular perfis cognitivos, comportamentais e níveis de conhecimento distintos.
+Para validar experimentalmente a eficácia pedagógica e evitar **loops infinitos de simulação** (onde o aluno erra repetidamente na mesma fase), o Agente Aluno foi remodelado para possuir um mecanismo de **Progressão Cognitiva (Comprehension)**. O comportamento do aluno mescla a estocasticidade de erros com a diretiva de raciocínio estruturado (Chain of Thought) proposta na literatura acadêmica recente.
 
-### 3.1. Modelagem Psicométrica da Persona Discente (`StudentProfile`)
+### 3.1. Lógica do Nó do Agente Aluno (`student_agent.py`)
 
-O Agente Aluno deve ser modelado formalmente via Pydantic para refletir os perfis observados em ambientes educacionais de computação:
-
-```python
-# src/simulation/schema.py
-from pydantic import BaseModel, Field
-from typing import Literal
-
-class StudentProfile(BaseModel):
-    name: str = Field(..., description="Identificador único do perfil do aluno simulado")
-    knowledge_level: Literal["novice", "intermediate", "advanced"] = Field(
-        ..., description="Nível de conhecimento prévio em programação e lógica algorítmica"
-    )
-    error_propensity: float = Field(
-        ..., ge=0.0, le=1.0, 
-        description="Probabilidade (entre 0.0 e 1.0) de o aluno cometer um erro lógico ou estrutural intencional"
-    )
-    impatience_level: float = Field(
-        ..., ge=0.0, le=1.0,
-        description="Probabilidade de o aluno tentar solicitar a resposta pronta ou desviar da metodologia socrática"
-    )
-    communication_style: str = Field(
-        ..., description="Padrão linguístico do aluno: verboso, monossilábico, confuso, altamente técnico ou informal"
-    )
-    domain_problem: str = Field(
-        ..., description="O problema prático que o aluno deseja modelar e resolver (ex: 'Sistema de triagem de pronto-socorro')"
-    )
-```
-
-### 3.2. Implementação Lógica do Nó do Agente Aluno (`student_agent.py`)
-
-O módulo do aluno consome a última intervenção do Tutor e a configuração psicométrica do seu perfil para produzir uma resposta autêntica e estocasticamente coerente:
+A função abaixo incorpora a contagem de tentativas (`attempts_in_stage`) para forçar o aprendizado após falhas consecutivas, mesclando o prompt socrático referenciado na literatura com o controle estocástico:
 
 ```python
-# src/simulation/student_agent.py
 import random
 from typing import List
-from langchain_core.messages import SystemMessage, AnyMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from src.simulation.schema import StudentProfile
+from langchain_core.messages import SystemMessage, AnyMessage, HumanMessage, AIMessage
+from llm_factory import get_llm
+from simulation.schema import StudentProfile
 
-def run_student_turn(messages: List[AnyMessage], profile: StudentProfile, current_stage: str) -> str:
+STUDENT_SYSTEM_PROMPT = """Você é um Estudante humano simulado interagindo com um Tutor de Inteligência Artificial baseado no Pensamento Computacional.
+
+### PERFIL DISCENTE:
+- Identificação: {name}
+- Nível de Conhecimento Prévio: {knowledge_level}
+- Estilo Linguístico: {communication_style}
+- Objetivo Pedagógico: {domain_problem}
+
+### DIRETRIZES COMPORTAMENTAIS DE SIMULAÇÃO:
+1. Aja estritamente como um estudante que está aprendendo lógica de programação. Nunca revele que você é um modelo de linguagem ou um assistente virtual.
+2. Responda especificamente à última pergunta formulada pelo Tutor, aplicando o seguinte comportamento de simulação:{behavior_instruction}
+3. Restrinja o tamanho da resposta a um formato compatível com interações em chat educacional (máximo de 1 a 3 parágrafos curtos)."""
+
+BEHAVIOR_IMPATIENT = """
+- COMPORTAMENTO ATUAL: Você está demonstrando impaciência com o método socrático. Reclame que a abordagem está excessivamente abstrata ou demorada, exija que o tutor forneça o código em Python ou a resposta final, e forneça uma resposta incompleta à pergunta formulada."""
+
+BEHAVIOR_ERROR = """
+- COMPORTAMENTO ATUAL: Introduza um erro conceitual ou lógico característico de estudantes na etapa de {stage}. Por exemplo, na Decomposição, misture conceitos de entrada com saída ou liste tarefas interdependentes; na Abstração, insista em manter detalhes estéticos ou ruídos irrelevantes."""
+
+# Integração da diretiva colaborativa do artigo base
+BEHAVIOR_COLLABORATIVE = """
+- COMPORTAMENTO ATUAL: Você é um estudante dedicado e curioso. Colabore ativamente.
+- Reflita internamente sobre a explicação do tutor e aja da seguinte forma:
+  1. Se não compreender totalmente, formule uma nova pergunta conectada à resposta anterior.
+  2. Raciocine de forma estruturada (Chain of Thought) e avance passo a passo.
+- Responda de forma lógica e alinhada a um estudante de nível {knowledge_level}."""
+
+# Mecanismo de Progressão (Comprehension)
+BEHAVIOR_COMPREHENSION = """
+- COMPORTAMENTO ATUAL: Você refletiu internamente e alcançou a compreensão plena do conceito da etapa.
+- Diga expressamente: "Entendi!" ou agradeça a dica.
+- Formule a resposta EXATA, CORRETA e COOPERATIVA esperada pelo Tutor para concluir a etapa de {stage}. Mostre que você absorveu o conhecimento e resolveu a restrição da etapa."""
+
+def _ensure_last_message_is_human(messages: List[AnyMessage]) -> List[AnyMessage]:
+    """Garante que a última mensagem seja um HumanMessage para compatibilidade com a API."""
+    if not messages:
+        return [HumanMessage(content="Por favor, comece sua resposta.")]
+    last_msg = messages[-1]
+    if isinstance(last_msg, AIMessage):
+        return messages[:-1] + [HumanMessage(content="Por favor, responda à pergunta anterior do Tutor.")]
+    return messages
+
+def run_student_turn(messages: List[AnyMessage], profile: StudentProfile, current_stage: str, attempts_in_stage: int) -> str:
     """Executa um turno interativo do Agente Aluno formulando uma resposta com base na pergunta do Tutor e no perfil discente."""
     
-    # Determinação estocástica do comportamento para o turno atual
-    should_make_error = random.random() < profile.error_propensity
-    should_be_impatient = random.random() < profile.impatience_level
-    
-    behavior_instruction = ""
-    if should_be_impatient:
-        behavior_instruction += "
-- COMPORTAMENTO ATUAL: Você está demonstrando impaciência com o método socrático. Reclame que a abordagem está excessivamente abstrata ou demorada, exija que o tutor forneça o código em Python ou a resposta final, e forneça uma resposta incompleta à pergunta formulada."
-    elif should_make_error:
-        behavior_instruction += f"
-- COMPORTAMENTO ATUAL: Introduza um erro conceitual ou lógico característico de estudantes na etapa de {current_stage.upper()}. Por exemplo, na Decomposição, misture conceitos de entrada com saída ou liste tarefas interdependentes; na Abstração, insista em manter detalhes estéticos ou ruídos irrelevantes."
+    # Progressão Cognitiva: Força o acerto após 2 falhas na mesma fase
+    if attempts_in_stage >= 2:
+        behavior_instruction = BEHAVIOR_COMPREHENSION.format(stage=current_stage.upper())
     else:
-        behavior_instruction += f"
-- COMPORTAMENTO ATUAL: Colabore ativamente com a solicitação do tutor, respondendo de forma lógica e alinhada a um estudante com nível de conhecimento {profile.knowledge_level.upper()}."
+        should_make_error = random.random() < profile.error_propensity
+        should_be_impatient = random.random() < profile.impatience_level
 
-    sys_prompt = f"""Você é um Estudante humano simulado interagindo com um Tutor de Inteligência Artificial baseado no Pensamento Computacional.
-    
-    ### PERFIL DISCENTE:
-    - Identificação: {profile.name}
-    - Nível de Conhecimento Prévio: {profile.knowledge_level}
-    - Estilo Linguístico: {profile.communication_style}
-    - Objetivo Pedagógico: {profile.domain_problem}
-    
-    ### DIRETRIZES COMPORTAMENTAIS DE SIMULAÇÃO:
-    1. Aja estritamente como um estudante que está aprendendo lógica de programação. Nunca revele que você é um modelo de linguagem ou um assistente virtual.
-    2. Responda especificamente à última pergunta formulada pelo Tutor, aplicando o seguinte comportamento de simulação:{behavior_instruction}
-    3. Restrinja o tamanho da resposta a um formato compatível com interações em chat educacional (máximo de 1 a 3 parágrafos curtos).
-    """
+        if should_be_impatient:
+            behavior_instruction = BEHAVIOR_IMPATIENT
+        elif should_make_error:
+            behavior_instruction = BEHAVIOR_ERROR.format(stage=current_stage.upper())
+        else:
+            behavior_instruction = BEHAVIOR_COLLABORATIVE.format(knowledge_level=profile.knowledge_level.upper())
 
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite", temperature=0.7)
-    
-    # Prepara o contexto recente para manter o foco computacional
-    invocation_messages = [SystemMessage(content=sys_prompt)] + messages[-6:]
+    sys_prompt = STUDENT_SYSTEM_PROMPT.format(
+        name=profile.name,
+        knowledge_level=profile.knowledge_level,
+        communication_style=profile.communication_style,
+        domain_problem=profile.domain_problem,
+        behavior_instruction=behavior_instruction,
+    )
+
+    llm = get_llm(temperature=0.7)
+    context_messages = _ensure_last_message_is_human(messages[-6:])
+    invocation_messages = [SystemMessage(content=sys_prompt)] + context_messages
     response = llm.invoke(invocation_messages)
-    
-    return response.content
+
+    return response.content if isinstance(response.content, str) else str(response.content)
 ```
+
+### 3.2. Lógica do Mecanismo de Compreensão (student_agent.py)
+
+A constante de compreensão deve obrigar o LLM a fornecer a síntese completa para satisfazer o Avaliador:
+
+```python
+BEHAVIOR_COMPREHENSION = """
+- COMPORTAMENTO ATUAL: Você refletiu internamente e alcançou a compreensão plena da etapa de {stage}.
+- Para que o sistema reconheça seu avanço, você DEVE fornecer a síntese COMPLETA e ESTRUTURADA em sua resposta.
+- Se for Decomposição: Escreva o objetivo final, liste todas as subtarefas e defina Entrada (Input) e Saída (Output) para CADA subtarefa.
+- Se for Padrões: Descreva a regra geral e as semelhanças encontradas.
+- Se for Abstração: Liste as variáveis críticas, os detalhes ignorados e o modelo simplificado.
+- Se for Algoritmo: Escreva o passo a passo completo, com condições/loops e critério de parada.
+- Não deixe faltar nenhum elemento! Seja cooperativo e exato."""
 
 ---
 
