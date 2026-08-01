@@ -47,26 +47,23 @@ class SimulationOrchestrator:
             turn_count += 1
             print(f"\n[Turno {turn_count}] Processando transição no Grafo do Tutor...")
 
-            tutor_output_state = None
-            for event in tutor_app.stream(state):
-                for node_name, node_data in event.items():
-                    tutor_output_state = node_data
+            final_state = None
+            for snapshot in tutor_app.stream(state, stream_mode="values"):
+                final_state = snapshot
 
-            print(f"  [Delay] Aguardando {self.delay}s após chamada do Tutor...")
-            time.sleep(self.delay)
-
-            if tutor_output_state:
-                if "messages" in tutor_output_state:
-                    state["messages"].extend(tutor_output_state["messages"])
-                for key in [
+            if final_state is not None:
+                for key in (
+                    "messages",
                     "current_stage",
                     "is_tutoring_active",
                     "approved",
                     "evaluation_feedback",
                     "student_artifacts",
-                ]:
-                    if key in tutor_output_state:
-                        state[key] = tutor_output_state[key]
+                ):
+                    state[key] = final_state.get(key, state[key])
+
+            print(f"  [Delay] Aguardando {self.delay}s após chamada do Tutor...")
+            time.sleep(self.delay)
 
             if state["current_stage"] == last_stage and not state["approved"]:
                 attempts_in_current_stage += 1

@@ -90,6 +90,14 @@
 - **Fix 2 (`simulation/student_agent.py`):** `BEHAVIOR_COMPREHENSION` substituído integralmente pelo texto MACRO da Seção 3.2 do AGENTS.md (síntese COMPLETA e ESTRUTURADA; regras por estágio: objetivo + subtarefas + Input/Output na Decomposição, regra geral em Padrões, variáveis/modelo em Abstração, passo a passo/loops/parada em Algoritmo). Impaciência/erro/colaborativo inalterados.
 - Validação (sem rede): `py_compile` OK; teste de ramificação (Comprehension macro contém "síntese COMPLETA e ESTRUTURADA" e "Entrada (Input) e Saída (Output)"; impaciente/erro/CoT preservados); novo teste do orquestrador com `tutor_app.stream` mockado (4 iterações) confirma crescimento monotônico de mensagens `[1→3→5→7]` sem perda nem duplicação, trace completo e semântica de `completed` preservada
 
+### 2026-08-01 - Fix da Amnésia de Estado + Loop de Alucinação de Identidade (orquestrador)
+- **Diagnóstico via logs (`session_test.jsonl`):** fluxo CT progrediu pelos 4 pilares, mas travou no final — `completed=False`, `final_stage=algorithm`, `artifacts_collected={}` e "loop de alucinação de identidade" (turno 11: Tutor fecha a sessão com "Parabéns... Missão cumprida" em vez de perguntar; Aluno inverte papéis e chama o Tutor de "Ana")
+- **Causa raiz:** captura manual "só do último nó" (`tutor_output_state = node_data`) → a cada invocação o grafo era re-seedado com `student_artifacts={}` (todos os artefatos dos pilares perdidos) e histórico substituído; sem o Quadro-Negro, `algorithm_node` e o avaliador perdem contexto, o tutor julga a sessão concluída por conta própria e os agentes entram em congratulação mútua
+- **Bug adicional no working tree:** bloco interno (acumular eventos) adicionado sem remover o bloco externo antigo → dupla aplicação (cada mensagem do nó terminal era estendida 2x em `state["messages"]`)
+- **Fix (`simulation/orchestrator.py`):** substituído todo o merge manual por `tutor_app.stream(state, stream_mode="values")` capturando o último snapshot — o estado COMPLETO acumulado do grafo (mensagens via reducer `add_messages`, artefatos via last-write-wins). Sincronização das 6 chaves (`messages`, `current_stage`, `is_tutoring_active`, `approved`, `evaluation_feedback`, `student_artifacts`). Elimina amnésia de artefatos/histórico E a dupla aplicação
+- `AGENTS.md` Seção 4 (blueprint): padrão `tutor_output_state = node_data` → `stream_mode="values"` + nota de implementação; critério de parada alinhado ao código real (`current_stage == "completed"`)
+- Validação (sem rede): `py_compile` OK; teste com `stream` mockado em modo `values` — artefatos persistem entre invocações (`decomposition`/`pattern`/`abstraction` retidos), mensagens crescem `[1→3→5→7]` sem duplicação, `current_stage="completed"` dispara `break` imediato com `completed=True` e resumo registrado no trace
+
 ## Decisões Arquiteturais
 
 | Data | Decisão | Justificativa |
@@ -120,6 +128,7 @@
 | 2026-08-01 | Renomear "Aha! Moment" para "Comprehension" | Terminologia profissional para o artigo científico; `BEHAVIOR_COMPREHENSION` no código e AGENTS.md |
 | 2026-08-01 | Acumular `messages` via `.extend()` em vez de atribuição direta | Em modo `updates` do `stream()`, o canal `messages` entrega só as mensagens novas do nó; atribuição causava amnésia a cada turno |
 | 2026-08-01 | `BEHAVIOR_COMPREHENSION` = síntese MACRO da Seção 3.2 | Rubrica do avaliador exige goal + subtarefas + I/O completos; resposta micro à pergunta do Tutor nunca passava no Gatekeeper |
+| 2026-08-01 | Usar `stream_mode="values"` e capturar o último snapshot | É o único jeito de sincronizar o estado COMPLETO do grafo (reducers aplicados: `add_messages` + last-write-wins); merge manual por evento causava amnésia de artefatos e dupla aplicação de mensagens |
 
 ## Checklist - Fase 1 (AGENTS.md Seção 6)
 
@@ -168,6 +177,7 @@
 | `simulation/orchestrator.py` | Atualizado | Removido delay entre sessões |
 | `simulation/orchestrator.py` | Atualizado | Rastreador `attempts_in_current_stage` anti-loop; chamada nomeada com `attempts_in_stage` |
 | `simulation/orchestrator.py` | Atualizado | Fix amnésia: acúmulo do histórico via `state["messages"].extend(...)` em vez de atribuição |
+| `simulation/orchestrator.py` | Atualizado | Fix amnésia final: `stream_mode="values"` + sincronização das 6 chaves; remove merge manual e dupla aplicação |
 | `profiles.py` | Novo | 4 perfis discentes pré-configurados |
 | `run_simulation.py` | Novo | Script CLI para execução de simulações em batch com delay configurável |
 | `run_simulation.py` | Atualizado | Salvamento incremental com `append_session_to_jsonl()` |
@@ -180,4 +190,5 @@
 | `paper_benchmark_summary_table.csv` | Gerado | Piloto (8 casos): média (0.0–1.0) e taxa de sucesso por métrica |
 | `AGENTS.md` | Atualizado | Modelo `gemini-3.5-flash-lite`; `SingleTurnParams`; `ContextualRelevancyMetric`; instância `GeminiModel` no blueprint da Seção 5.1; checklist Fase 4 |
 | `AGENTS.md` | Atualizado | "Aha! Moment" → "Comprehension" nas 3 ocorrências da Seção 3.1 (`BEHAVIOR_COMPREHENSION`) |
+| `AGENTS.md` | Atualizado | Seção 4: blueprint do orquestrador com `stream_mode="values"` + nota anti-amnésia; critério de parada `completed` |
 | `PROGRESS.md` | Atualizado | Este arquivo |

@@ -282,17 +282,17 @@ class SimulationOrchestrator:
             print(f"
 [Turno {turn_count}] Processando transição no Grafo do Tutor...")
             
-            tutor_output_state = None
-            for event in tutor_app.stream(state):
-                for node_name, node_data in event.items():
-                    tutor_output_state = node_data
-            
-            if tutor_output_state:
-                if "messages" in tutor_output_state:
-                    state["messages"] = tutor_output_state["messages"]
+            # IMPORTANTE: stream_mode="values" entrega o ESTADO COMPLETO acumulado (mensagens via reducer add_messages,
+            # artefatos via last-write-wins) a cada super-step. Capturar o último snapshot evita a AMNÉSIA DE ESTADO
+            # (artefatos e histórico perdidos ao ler apenas a saída do último nó em modo "updates").
+            final_state = None
+            for snapshot in tutor_app.stream(state, stream_mode="values"):
+                final_state = snapshot
+
+            if final_state is not None:
                 for key in ["current_stage", "is_tutoring_active", "approved", "evaluation_feedback", "student_artifacts"]:
-                    if key in tutor_output_state:
-                        state[key] = tutor_output_state[key]
+                    state[key] = final_state.get(key, state[key])
+                state["messages"] = final_state.get("messages", state["messages"])
 
             last_ai_msg = state["messages"][-1].content
             print(f"[Tutor -> Aluno | Pilar: {state['current_stage']} | Status Aprovado: {state['approved']}]: {last_ai_msg[:100]}...")
@@ -306,8 +306,8 @@ class SimulationOrchestrator:
                 "artifacts_snapshot": str(state["student_artifacts"])
             })
 
-            # Critério de Parada Técnico: Atingimento da aprovação final no pilar de Algoritmos
-            if state["current_stage"] == "algorithm" and state.get("approved", False):
+            # Critério de Parada Técnico: transição ao estado "completed" (após a execução do final_summary_node)
+            if state["current_stage"] == "completed":
                 print("--- Sessão finalizada com sucesso: Todos os quatro pilares foram consolidados no Quadro-Negro ---")
                 is_completed = True
                 break
