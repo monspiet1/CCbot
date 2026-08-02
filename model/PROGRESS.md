@@ -129,6 +129,7 @@
 | 2026-08-01 | Acumular `messages` via `.extend()` em vez de atribuição direta | Em modo `updates` do `stream()`, o canal `messages` entrega só as mensagens novas do nó; atribuição causava amnésia a cada turno |
 | 2026-08-01 | `BEHAVIOR_COMPREHENSION` = síntese MACRO da Seção 3.2 | Rubrica do avaliador exige goal + subtarefas + I/O completos; resposta micro à pergunta do Tutor nunca passava no Gatekeeper |
 | 2026-08-01 | Usar `stream_mode="values"` e capturar o último snapshot | É o único jeito de sincronizar o estado COMPLETO do grafo (reducers aplicados: `add_messages` + last-write-wins); merge manual por evento causava amnésia de artefatos e dupla aplicação de mensagens |
+| 2026-08-01 | `DEFAULT_REQUEST_TIMEOUT` 30s → 120s | `httpx.ReadTimeout` no free tier com saídas estruturadas; o Gemini ultrapassava 30s de leitura nas 3 tentativas e o SDK repropagava o erro, derrubando o batch |
 
 ## Checklist - Fase 1 (AGENTS.md Seção 6)
 

@@ -11,7 +11,7 @@ load_dotenv("./.env")
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_REQUEST_TIMEOUT = 30.0
+DEFAULT_REQUEST_TIMEOUT = 120.0
 
 
 def get_llm(
