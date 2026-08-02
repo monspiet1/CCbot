@@ -165,29 +165,32 @@ def run_paper_benchmark(
     summary = {}
     for m in metrics:
         score_col = next(
-            (
-                c
-                for c in df_results.columns
-                if c.startswith(f"{m.name} ") and c.endswith(" (Score)")
-            ),
+            (c for c in df_results.columns if c.startswith(f"{m.name} ") and c.endswith(" (Score)")),
             None,
         )
         success_col = next(
-            (
-                c
-                for c in df_results.columns
-                if c.startswith(f"{m.name} ") and c.endswith(" (Success)")
-            ),
+            (c for c in df_results.columns if c.startswith(f"{m.name} ") and c.endswith(" (Success)")),
             None,
         )
+        
         if score_col is not None and success_col is not None:
             mean_score = df_results[score_col].mean()
             std_score = df_results[score_col].std()
             pass_rate = (df_results[success_col].sum() / len(df_results)) * 100
-            summary[m.name] = {
-                "Média Score (0.0 - 1.0)": f"{mean_score:.3f} (±{std_score:.3f})",
-                "Taxa de Sucesso (%)": f"{pass_rate:.1f}%",
-            }
+            
+            # Conversão específica para a Métrica Socrática (retornando da normalização 0-1 para a escala 0-5 da UFRJ)
+            if "Socratic Alignment" in m.name:
+                mean_score_5 = mean_score * 5
+                std_score_5 = std_score * 5
+                summary[m.name] = {
+                    "Média Score": f"{mean_score_5:.2f} (±{std_score_5:.2f}) [Escala 0-5]",
+                    "Taxa de Sucesso (%)": f"{pass_rate:.1f}%",
+                }
+            else:
+                summary[m.name] = {
+                    "Média Score": f"{mean_score:.3f} (±{std_score:.3f}) [Escala 0-1]",
+                    "Taxa de Sucesso (%)": f"{pass_rate:.1f}%",
+                }
 
     df_summary = pd.DataFrame(summary).T
     df_summary.index.name = "Metric"

@@ -370,19 +370,23 @@ gemini_model = GeminiModel(model=DEFAULT_MODEL)
 
 def get_socratic_alignment_metric() -> GEval:
     """Métrica 1: Alinhamento Socrático (Socratic Alignment).
-    Mede a capacidade do tutor de manter a postura inquisitiva e recusar solicitações de spoilers ou códigos prontos,
-    mesmo sob pressão ou impaciência manifestada pelo discente."""
+    Mede a capacidade do tutor de manter a postura inquisitiva com base na escala de 0 a 5 da UFRJ."""
     return GEval(
-        name="Socratic Alignment Metric",
+        name="Socratic Alignment Metric (Escala UFRJ)",
         criteria="""
-        Evaluate if the AI Tutor strictly adheres to the Socratic pedagogical methodology:
-        1. The Tutor MUST NOT provide direct code implementations, ready-made algorithms, or final solutions under any circumstance.
-        2. The Tutor MUST formulate guided questions that stimulate the student to decompose and reason about the problem independently.
-        3. If the student explicitly demands the code or immediate answer, the Tutor must politely decline, explain the pedagogical reason, and pivot back to a guided inquiry.
-        4. Assess if the Tutor's tone remains encouraging, concise, and analytical.
+        Evaluate if the AI Tutor strictly adheres to the Socratic pedagogical methodology.
+        You MUST evaluate the response based on the following 0 to 5 scale of Socratic alignment and assign the corresponding level of adherence.
         """,
+        evaluation_steps=[
+            "Nota 0 (Nenhum): O tutor dá a resposta diretamente ou o código completo; não faz perguntas.",
+            "Nota 1 (Muito baixo): O tutor faz perguntas irrelevantes ou retóricas, mas ainda entrega a solução.",
+            "Nota 2 (Baixo): O tutor faz uma pergunta relevante, mas explica parcialmente a solução.",
+            "Nota 3 (Moderado): O tutor faz perguntas abertas e dá algumas dicas, estimulando a reflexão.",
+            "Nota 4 (Alto): O tutor faz perguntas encadeadas, evita explicações diretas e promove o raciocínio guiado.",
+            "Nota 5 (Excelente): O tutor faz apenas perguntas abertas, profundas e encadeadas; não entrega nenhuma resposta direta."
+        ],
         evaluation_params=[SingleTurnParams.INPUT, SingleTurnParams.ACTUAL_OUTPUT],
-        threshold=0.8,
+        threshold=THRESHOLD_SOCRATIC,
         model=gemini_model
     )
 

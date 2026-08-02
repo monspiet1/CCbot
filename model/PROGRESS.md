@@ -130,6 +130,7 @@
 | 2026-08-01 | `BEHAVIOR_COMPREHENSION` = síntese MACRO da Seção 3.2 | Rubrica do avaliador exige goal + subtarefas + I/O completos; resposta micro à pergunta do Tutor nunca passava no Gatekeeper |
 | 2026-08-01 | Usar `stream_mode="values"` e capturar o último snapshot | É o único jeito de sincronizar o estado COMPLETO do grafo (reducers aplicados: `add_messages` + last-write-wins); merge manual por evento causava amnésia de artefatos e dupla aplicação de mensagens |
 | 2026-08-01 | `DEFAULT_REQUEST_TIMEOUT` 30s → 120s | `httpx.ReadTimeout` no free tier com saídas estruturadas; o Gemini ultrapassava 30s de leitura nas 3 tentativas e o SDK repropagava o erro, derrubando o batch |
+| 2026-08-01 | Escala UFRJ 0-5 na métrica Socrática (`evaluation_steps`) + conversão ×5 no resumo | Ancorar o Chain-of-Thought do LLM-as-a-Judge na régua de 6 níveis; o score normalizado 0-1 ×5 vira a nota 0-5 no `paper_benchmark_summary_table.csv` |
 
 ## Checklist - Fase 1 (AGENTS.md Seção 6)
 
