@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import os
 import random
 import time
 from typing import List
@@ -14,6 +15,14 @@ def append_session_to_jsonl(session: dict, filepath: str) -> None:
     """Salva uma sessão no arquivo JSONL (modo append)."""
     with open(filepath, "a", encoding="utf-8") as f:
         f.write(json.dumps(session, ensure_ascii=False) + "\n")
+
+
+def get_completed_sessions_count(filepath: str) -> int:
+    """Verifica quantas sessões já foram salvas com sucesso no arquivo JSONL."""
+    if not os.path.exists(filepath):
+        return 0
+    with open(filepath, "r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
 
 
 def distribute_sessions_uniformly(
@@ -36,7 +45,7 @@ def run_batch_simulation(
     delay: float = 65.0,
     output_path: str = "dataset_ct_tutoring.jsonl",
 ) -> List[dict]:
-    """Executa simulações em batch com distribuição uniforme de perfis."""
+    """Executa simulações em batch com distribuição uniforme e capacidade de retomada."""
     if seed is not None:
         random.seed(seed)
         print(f"Seed definida: {seed}")
@@ -45,19 +54,29 @@ def run_batch_simulation(
     orchestrator = SimulationOrchestrator(max_turns_per_session=15, delay_between_requests=delay)
     sessions = []
 
+    completed_count = get_completed_sessions_count(output_path)
+    
     print(f"\n{'='*60}")
     print(f"INICIANDO LOTE DE SIMULAÇÕES")
-    print(f"Total de sessões: {num_sessions}")
-    print(f"Distribuição uniforme: {len(profiles)} sessões")
+    print(f"Total de sessões planejadas: {num_sessions}")
+    print(f"Sessões já concluídas no disco: {completed_count}")
+    
+    if completed_count >= num_sessions:
+        print("Todas as sessões já foram concluídas!")
+        print(f"{'='*60}\n")
+        return []
+
+    remaining_profiles = profiles[completed_count:]
+    print(f"Retomando o processamento das {len(remaining_profiles)} sessões restantes...")
     print(f"Delay entre requisições LLM: {delay}s")
-    print(f"Arquivo de saída: {output_path}")
     print(f"{'='*60}\n")
 
     start_time = time.time()
 
-    for i, profile in enumerate(profiles):
-        session_id = f"session_{i+1:03d}"
-        print(f"\n[{i+1}/{num_sessions}] Executando sessão {session_id}...")
+    for i, profile in enumerate(remaining_profiles):
+        actual_index = completed_count + i 
+        session_id = f"session_{actual_index+1:03d}"
+        print(f"\n[{actual_index+1}/{num_sessions}] Executando sessão {session_id}...")
 
         result = orchestrator.simulate_session(profile, session_id)
         sessions.append(result)
@@ -67,19 +86,12 @@ def run_batch_simulation(
 
         elapsed = time.time() - start_time
         avg_time = elapsed / (i + 1)
-        remaining = avg_time * (num_sessions - i - 1)
+        remaining = avg_time * (len(remaining_profiles) - i - 1)
         print(
             f"  Sessão concluída: {result['completed']} | "
             f"Turnos: {result['total_turns']} | "
-            f"Tempo restante estimado: {remaining:.0f}s"
+            f"Tempo restante estimado do lote: {remaining:.0f}s"
         )
-
-    total_time = time.time() - start_time
-    print(f"\n{'='*60}")
-    print(f"LOTE CONCLUÍDO")
-    print(f"Tempo total: {total_time:.1f}s")
-    print(f"Sessões executadas: {len(sessions)}")
-    print(f"{'='*60}\n")
 
     return sessions
 
@@ -125,6 +137,9 @@ def main():
         delay=args.delay,
         output_path=args.output,
     )
+
+    if not sessions:
+        return
 
     completed = sum(1 for s in sessions if s["completed"])
     print(f"\nResumo:")

@@ -131,6 +131,8 @@
 | 2026-08-01 | Usar `stream_mode="values"` e capturar o último snapshot | É o único jeito de sincronizar o estado COMPLETO do grafo (reducers aplicados: `add_messages` + last-write-wins); merge manual por evento causava amnésia de artefatos e dupla aplicação de mensagens |
 | 2026-08-01 | `DEFAULT_REQUEST_TIMEOUT` 30s → 120s | `httpx.ReadTimeout` no free tier com saídas estruturadas; o Gemini ultrapassava 30s de leitura nas 3 tentativas e o SDK repropagava o erro, derrubando o batch |
 | 2026-08-01 | Escala UFRJ 0-5 na métrica Socrática (`evaluation_steps`) + conversão ×5 no resumo | Ancorar o Chain-of-Thought do LLM-as-a-Judge na régua de 6 níveis; o score normalizado 0-1 ×5 vira a nota 0-5 no `paper_benchmark_summary_table.csv` |
+| 2026-08-01 | Resume/idempotência em `run_simulation.py` e `benchmark_paper.py` | Contagem de linhas do disco (JSONL/CSV) + fatiamento do restante; retomada após 429/ReadTimeout sem reprocessar. Guarda `if not sessions` em `main()` contra ZeroDivisionError. CSV piloto antigo (esquema pré-renome) descartado manualmente |
+| 2026-08-01 | Salvamento incremental por lote no `benchmark_paper.py` | Append no CSV após cada lote (atomicidade por batch) + síntese regenerada a cada lote (`_build_and_write_summary`); crash entre lotes preserva o progresso e o re-run retoma sem duplicar |
 
 ## Checklist - Fase 1 (AGENTS.md Seção 6)
 

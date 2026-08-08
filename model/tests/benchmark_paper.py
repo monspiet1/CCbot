@@ -106,84 +106,29 @@ def _evaluate_with_retry(
     raise RuntimeError("Falha inesperada: nenhuma exceção capturada durante a avaliação.")
 
 
-def run_paper_benchmark(
-    jsonl_filepath: str = "dataset_ct_tutoring.jsonl",
-    max_cases: int | None = None,
-    batch_size: int = 3,
-    sleep_between_batches: float = 65.0,
-):
-    """Executa a suíte psicométrica completa via DeepEval e exporta tabelas consolidadas para o artigo.
-    O processamento é feito em lotes com pausa entre eles para respeitar o limite de requisições
-    do Gemini (free tier: ~15 req/min por modelo)."""
-    print("--- Iniciando carregamento do dataset e montagem dos casos de teste ---")
-    test_cases = load_dataset_as_test_cases(jsonl_filepath)
-    if max_cases is not None:
-        test_cases = test_cases[:max_cases]
-    print(
-        f"--- Total de turnos pedagógicos isolados para avaliação: {len(test_cases)} ---"
-    )
-
-    socratic_metric = get_socratic_alignment_metric()
-    scaffolding_metric = get_scaffolding_effectiveness_metric()
-    progression_metric = get_pedagogical_progression_metric()
-    relevancy_metric = get_contextual_relevancy_metric()
-
-    metrics = [socratic_metric, scaffolding_metric, progression_metric, relevancy_metric]
-
-    print("--- Executando julgamento automatizado via DeepEval (LLM-as-a-Judge) ---")
-    all_test_results = []
-    for start in range(0, len(test_cases), batch_size):
-        batch = test_cases[start : start + batch_size]
-        results = _evaluate_with_retry(batch, metrics, batch_size)
-        all_test_results.extend(results.test_results)
-        remaining = len(test_cases) - (start + len(batch))
-        if remaining > 0:
-            print(
-                f"--- Lote de {len(batch)} casos avaliado | avaliados {start + len(batch)}/{len(test_cases)} "
-                f"| pausa de {sleep_between_batches:.0f}s para respeitar a cota da API ---"
-            )
-            time.sleep(sleep_between_batches)
-
-    data_rows = []
-    for test_result in all_test_results:
-        row = {
-            "input_student": str(test_result.input)[:60] + "...",
-            "output_tutor": str(test_result.actual_output)[:60] + "...",
-        }
-        for metric_data in test_result.metrics_data:
-            row[f"{metric_data.name} (Score)"] = metric_data.score
-            row[f"{metric_data.name} (Success)"] = metric_data.success
-            row[f"{metric_data.name} (Reasoning)"] = (
-                metric_data.reason[:120] + "..." if metric_data.reason else ""
-            )
-        data_rows.append(row)
-
-    df_results = pd.DataFrame(data_rows)
-    df_results.to_csv("paper_benchmark_detailed_results.csv", index=False)
-
-    print("--- Síntese Estatística para Seção de Resultados do Artigo ---")
+def _build_and_write_summary(csv_file: str, metrics: List) -> None:
+    """Lê o CSV completo e regenera a tabela de síntese estatística (escala 0-5 para a Socrática)."""
+    df_results_full = pd.read_csv(csv_file)
+    print("\n--- Síntese Estatística para Seção de Resultados do Artigo ---")
     summary = {}
     for m in metrics:
         score_col = next(
-            (c for c in df_results.columns if c.startswith(f"{m.name} ") and c.endswith(" (Score)")),
+            (c for c in df_results_full.columns if c.startswith(f"{m.name} ") and c.endswith(" (Score)")),
             None,
         )
         success_col = next(
-            (c for c in df_results.columns if c.startswith(f"{m.name} ") and c.endswith(" (Success)")),
+            (c for c in df_results_full.columns if c.startswith(f"{m.name} ") and c.endswith(" (Success)")),
             None,
         )
-        
+
         if score_col is not None and success_col is not None:
-            mean_score = df_results[score_col].mean()
-            std_score = df_results[score_col].std()
-            pass_rate = (df_results[success_col].sum() / len(df_results)) * 100
-            
-            # Conversão específica para a Métrica Socrática (retornando da normalização 0-1 para a escala 0-5 da UFRJ)
-            if "Socratic Alignment" in m.name:
-                mean_score_5 = mean_score * 5
-                std_score_5 = std_score * 5
+            mean_score = df_results_full[score_col].mean()
+            std_score = df_results_full[score_col].std()
+            pass_rate = (df_results_full[success_col].sum() / len(df_results_full)) * 100
+
+            if "Socrat" in m.name:
                 summary[m.name] = {
-                    "Média Score": f"{mean_score_5:.2f} (±{std_score_5:.2f}) [Escala 0-5]",
+                    "Média Score": f"{(mean_score * 5):.2f} (±{(std_score * 5):.2f}) [Escala 0-5]",
                     "Taxa de Sucesso (%)": f"{pass_rate:.1f}%",
                 }
             else:
@@ -196,7 +141,80 @@ def run_paper_benchmark(
     df_summary.index.name = "Metric"
     print(df_summary.to_string())
     df_summary.to_csv("paper_benchmark_summary_table.csv")
-    print("--- Validação concluída: Arquivos CSV de benchmark gerados com êxito ---")
+
+
+def run_paper_benchmark(
+    jsonl_filepath: str = "dataset_ct_tutoring.jsonl",
+    max_cases: int | None = None,
+    batch_size: int = 3,
+    sleep_between_batches: float = 65.0,
+):
+    print("--- Iniciando carregamento do dataset e montagem dos casos de teste ---")
+    test_cases = load_dataset_as_test_cases(jsonl_filepath)
+    if max_cases is not None:
+        test_cases = test_cases[:max_cases]
+    print(f"--- Total de turnos pedagógicos extraídos: {len(test_cases)} ---")
+
+    csv_file = "paper_benchmark_detailed_results.csv"
+    evaluated_count = 0
+
+    if os.path.exists(csv_file):
+        df_existing = pd.read_csv(csv_file)
+        evaluated_count = len(df_existing)
+        print(f"--- Encontrados {evaluated_count} testes já avaliados no arquivo CSV. ---")
+
+    if evaluated_count >= len(test_cases):
+        print("--- Todos os testes já foram avaliados. Nenhuma ação necessária. ---")
+        return
+
+    remaining_test_cases = test_cases[evaluated_count:]
+    print(f"--- Retomando a avaliação automática para os {len(remaining_test_cases)} testes restantes... ---")
+
+    socratic_metric = get_socratic_alignment_metric()
+    scaffolding_metric = get_scaffolding_effectiveness_metric()
+    progression_metric = get_pedagogical_progression_metric()
+    relevancy_metric = get_contextual_relevancy_metric()
+
+    metrics = [socratic_metric, scaffolding_metric, progression_metric, relevancy_metric]
+
+    for i, start in enumerate(range(0, len(remaining_test_cases), batch_size)):
+        batch = remaining_test_cases[start : start + batch_size]
+        results = _evaluate_with_retry(batch, metrics, batch_size)
+
+        data_rows = []
+        for test_result in results.test_results:
+            row: dict[str, object] = {
+                "input_student": str(test_result.input)[:60] + "...",
+                "output_tutor": str(test_result.actual_output)[:60] + "...",
+            }
+            for metric_data in (test_result.metrics_data or []):
+                row[f"{metric_data.name} (Score)"] = metric_data.score
+                row[f"{metric_data.name} (Success)"] = metric_data.success
+                row[f"{metric_data.name} (Reasoning)"] = (
+                    metric_data.reason[:120] + "..." if metric_data.reason else ""
+                )
+            data_rows.append(row)
+
+        df_batch = pd.DataFrame(data_rows)
+        if evaluated_count > 0 or i > 0:
+            df_batch.to_csv(csv_file, mode="a", header=False, index=False)
+        else:
+            df_batch.to_csv(csv_file, index=False)
+
+        processed = evaluated_count + (i + 1) * len(batch)
+        print(f"--- Lote {i + 1} avaliado e persistido no CSV ({processed}/{len(test_cases)} casos) ---")
+
+        _build_and_write_summary(csv_file, metrics)
+
+        remaining = len(remaining_test_cases) - (start + len(batch))
+        if remaining > 0:
+            print(
+                f"--- Restam {remaining} casos "
+                f"| Pausa de {sleep_between_batches:.0f}s para respeitar a cota da API ---"
+            )
+            time.sleep(sleep_between_batches)
+
+    print("--- Benchmark concluído: todos os casos avaliados e persistidos ---")
 
 
 if __name__ == "__main__":
